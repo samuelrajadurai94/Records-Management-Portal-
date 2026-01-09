@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+gemrec_env/
+.env
+
+# Node
+node_modules/
+dist/
+.DS_Store
+backend/Gemrec_test1.ipynb
