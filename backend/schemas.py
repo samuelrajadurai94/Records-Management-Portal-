@@ -33,7 +33,7 @@ class EngineBase(BaseModel):
     serial_number: str
 
 class EngineCreate(EngineBase):
-    local_path: Optional[str] = None
+    pass
 
 class Engine(EngineBase):
     id: int

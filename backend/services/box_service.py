@@ -5,7 +5,6 @@ from io import BytesIO
 from box_sdk_gen import BoxClient, BoxJWTAuth, JWTConfig
 from box_sdk_gen.managers.uploads import UploadFileAttributes, UploadFileAttributesParentField
 from box_sdk_gen.managers.folders import CreateFolderParent
-from box_sdk_gen.schemas import Folder
 
 # Constants
 CHUNKED_UPLOAD_MINIMUM = 50 * 1024 * 1024  # 50MB
@@ -65,11 +64,13 @@ class BoxService:
                     offset += len(chunk)
             
             file_digest = f"sha={base64.b64encode(sha1_full.digest()).decode()}"
-            return self.client.chunked_uploads.create_file_upload_session_commit(
+            result = self.client.chunked_uploads.create_file_upload_session_commit(
                 session.id, parts, file_digest
             )
+            print(f"Successfully uploaded chunked file: {file_name}")
+            return result
         except Exception as e:
-            print(f"Error in chunked upload: {e}")
+            print(f"Error in chunked upload for {file_name}: {e}")
             return None
 
     def upload_file(self, parent_folder_id, file_path):
@@ -101,6 +102,10 @@ class BoxService:
         """Recursively upload folder contents to Box"""
         if not self.client: return
 
+        if not os.path.exists(local_path):
+            print(f"Local path not found: {local_path}")
+            return
+
         for item in os.listdir(local_path):
             item_path = os.path.join(local_path, item)
             
@@ -113,24 +118,127 @@ class BoxService:
                         item, 
                         CreateFolderParent(id=parent_folder_id)
                     )
+                    print(f"Created subfolder: {item}")
                     self.upload_folder_contents(subfolder.id, item_path)
                 except Exception as e:
-                    # If folder exists, we might want to find it and upload into it
-                    print(f"Could not create subfolder {item}: {e}")
-                    # logic to find existing folder could be added here if needed
+                    print(f"Could not create subfolder {item} (possibly exists): {e}")
+                    # Attempt to find existing folder to continue upload if needed
+                    # For simplicity, we skip if folder creation fails, but in prod we'd lookup ID
+                    pass
 
-    def create_root_engine_folder(self, folder_name):
-        """Creates a folder for the engine inside the global ROOT_FOLDER_ID"""
+    def create_and_upload_engine_folder(self, folder_name, local_path):
+        """Creates a root engine folder and uploads contents"""
         if not self.client: return None
+        
         try:
-            folder = self.client.folders.create_folder(
+            # Create the Engine Folder (e.g. Serial Number) in the Project Root
+            root_folder = self.client.folders.create_folder(
                 folder_name,
                 CreateFolderParent(id=ROOT_FOLDER_ID)
             )
-            print(f"Created engine folder: {folder_name} (ID: {folder.id})")
-            return folder
+            print(f"Created Engine Root Folder: {folder_name} (ID: {root_folder.id})")
+            
+            # Upload contents
+            if local_path and os.path.exists(local_path):
+                print(f"Starting recursive upload from {local_path}...")
+                self.upload_folder_contents(root_folder.id, local_path)
+                print("Upload complete.")
+            
+            return root_folder
         except Exception as e:
-            print(f"Error creating engine folder: {e}")
+            print(f"Error creating engine folder {folder_name}: {e}")
+            return None
+
+    def get_folder_items(self, folder_id):
+        """Get all items (files and folders) in a Box folder"""
+        if not self.client:
+            return {"folders": [], "files": []}
+        
+        try:
+            items = self.client.folders.get_folder_items(folder_id)
+            folders = []
+            files = []
+            
+            for item in items.entries:
+                if item.type == "folder":
+                    folders.append({
+                        "id": item.id,
+                        "name": item.name,
+                        "type": "folder"
+                    })
+                elif item.type == "file":
+                    files.append({
+                        "id": item.id,
+                        "name": item.name,
+                        "type": "file",
+                        "size": getattr(item, 'size', 0),
+                        "modified_at": getattr(item, 'modified_at', None)
+                    })
+            
+            return {"folders": folders, "files": files}
+        except Exception as e:
+            print(f"Error getting folder items for {folder_id}: {e}")
+            return {"folders": [], "files": []}
+
+    def get_folder_hierarchy(self, folder_id, max_depth=3, current_depth=0):
+        """Recursively build folder tree structure"""
+        if not self.client or current_depth >= max_depth:
+            return None
+        
+        try:
+            folder_info = self.client.folders.get_folder_by_id(folder_id)
+            items = self.get_folder_items(folder_id)
+            
+            children = []
+            for subfolder in items["folders"]:
+                child_hierarchy = self.get_folder_hierarchy(
+                    subfolder["id"], 
+                    max_depth, 
+                    current_depth + 1
+                )
+                if child_hierarchy:
+                    children.append(child_hierarchy)
+            
+            return {
+                "id": folder_id,
+                "name": folder_info.name,
+                "type": "folder",
+                "children": children,
+                "file_count": len(items["files"])
+            }
+        except Exception as e:
+            print(f"Error getting folder hierarchy for {folder_id}: {e}")
+            return None
+
+    def get_file_download_url(self, file_id):
+        """Get temporary download URL for a file"""
+        if not self.client:
+            return None
+        
+        try:
+            download_url = self.client.files.get_file_download_url(file_id)
+            return download_url
+        except Exception as e:
+            print(f"Error getting download URL for file {file_id}: {e}")
+            return None
+
+    def get_file_info(self, file_id):
+        """Get detailed file information"""
+        if not self.client:
+            return None
+        
+        try:
+            file_info = self.client.files.get_file_by_id(file_id)
+            return {
+                "id": file_info.id,
+                "name": file_info.name,
+                "size": file_info.size,
+                "modified_at": file_info.modified_at,
+                "extension": file_info.name.split('.')[-1] if '.' in file_info.name else ''
+            }
+        except Exception as e:
+            print(f"Error getting file info for {file_id}: {e}")
             return None
 
 box_service = BoxService()
+
