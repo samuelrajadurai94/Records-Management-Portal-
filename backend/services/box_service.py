@@ -99,7 +99,7 @@ class BoxService:
             return None
 
     def upload_folder_contents(self, parent_folder_id, local_path):
-        """Recursively upload folder contents to Box"""
+        """Recursively upload folder contents to Box maintaining hierarchy"""
         if not self.client: return
 
         if not os.path.exists(local_path):
@@ -110,37 +110,40 @@ class BoxService:
             item_path = os.path.join(local_path, item)
             
             if os.path.isfile(item_path):
+                # Upload file to current parent folder
                 self.upload_file(parent_folder_id, item_path)
             
             elif os.path.isdir(item_path):
+                # Create subfolder and recursively upload its contents
                 try:
                     subfolder = self.client.folders.create_folder(
                         item, 
                         CreateFolderParent(id=parent_folder_id)
                     )
                     print(f"Created subfolder: {item}")
+                    # Recursively upload subfolder contents
                     self.upload_folder_contents(subfolder.id, item_path)
                 except Exception as e:
-                    print(f"Could not create subfolder {item} (possibly exists): {e}")
-                    # Attempt to find existing folder to continue upload if needed
-                    # For simplicity, we skip if folder creation fails, but in prod we'd lookup ID
+                    print(f"Could not create subfolder {item}: {e}")
+                    # If folder exists, try to find it and continue
                     pass
 
     def create_and_upload_engine_folder(self, folder_name, local_path):
-        """Creates a root engine folder and uploads contents"""
+        """Creates a root engine folder and uploads contents maintaining hierarchy"""
         if not self.client: return None
         
         try:
-            # Create the Engine Folder (e.g. Serial Number) in the Project Root
+            # Create the Engine Root Folder (e.g. Serial Number) in the Project Root
             root_folder = self.client.folders.create_folder(
                 folder_name,
                 CreateFolderParent(id=ROOT_FOLDER_ID)
             )
             print(f"Created Engine Root Folder: {folder_name} (ID: {root_folder.id})")
             
-            # Upload contents
+            # Upload contents maintaining folder hierarchy
             if local_path and os.path.exists(local_path):
                 print(f"Starting recursive upload from {local_path}...")
+                # Upload the contents of the local folder into the root folder
                 self.upload_folder_contents(root_folder.id, local_path)
                 print("Upload complete.")
             

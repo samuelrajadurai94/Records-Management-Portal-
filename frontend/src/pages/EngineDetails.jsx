@@ -94,7 +94,7 @@ export default function EngineDetails() {
                         padding: '8px 12px',
                         paddingLeft: `${12 + level * 20}px`,
                         cursor: 'pointer',
-                        background: isActive ? '#8B1538' : 'transparent',
+                        background: isActive ? 'var(--primary)' : 'transparent',
                         color: isActive ? 'white' : '#333',
                         borderRadius: '4px',
                         marginBottom: '2px',
@@ -168,7 +168,7 @@ export default function EngineDetails() {
         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#f5f5f5' }}>
             {/* Header */}
             <div style={{
-                background: '#8B1538',
+                background: 'var(--primary)',
                 color: 'white',
                 padding: '1rem 1.5rem',
                 display: 'flex',
@@ -297,14 +297,14 @@ export default function EngineDetails() {
                                     background: 'white',
                                     padding: '1rem',
                                     borderRadius: '8px',
-                                    border: selectedFile?.id === file.id ? '2px solid #8B1538' : '1px solid #e0e0e0',
+                                    border: selectedFile?.id === file.id ? '2px solid var(--primary)' : '1px solid #e0e0e0',
                                     cursor: 'pointer',
                                     display: 'flex',
                                     flexDirection: 'column',
                                     alignItems: 'center',
                                     gap: '8px',
                                     transition: 'all 0.2s',
-                                    boxShadow: selectedFile?.id === file.id ? '0 4px 12px rgba(139,21,56,0.2)' : '0 1px 3px rgba(0,0,0,0.05)'
+                                    boxShadow: selectedFile?.id === file.id ? '0 4px 12px rgba(2,62,138,0.2)' : '0 1px 3px rgba(0,0,0,0.05)'
                                 }}
                                 onMouseEnter={(e) => {
                                     if (selectedFile?.id !== file.id) {
@@ -319,7 +319,7 @@ export default function EngineDetails() {
                                     }
                                 }}
                             >
-                                <FileText size={40} color="#8B1538" />
+                                <FileText size={40} color="var(--primary)" />
                                 <span style={{ fontSize: '0.85rem', textAlign: 'center', wordBreak: 'break-word' }}>
                                     {file.name}
                                 </span>
@@ -346,7 +346,7 @@ export default function EngineDetails() {
                     }}>
                         <h3 style={{ marginTop: 0, fontSize: '1.1rem', marginBottom: '1rem' }}>File Details</h3>
                         <div style={{ marginBottom: '1rem' }}>
-                            <FileText size={64} color="#8B1538" style={{ marginBottom: '1rem' }} />
+                            <FileText size={64} color="var(--primary)" style={{ marginBottom: '1rem' }} />
                             <p style={{ fontWeight: 600, marginBottom: '0.5rem', wordBreak: 'break-word' }}>
                                 {selectedFile.file_info?.name || selectedFile.name}
                             </p>
