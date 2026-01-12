@@ -178,7 +178,7 @@ export default function EngineDetails() {
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <button
-                        onClick={() => navigate('/')}
+                        onClick={() => navigate('/dashboard')}
                         style={{
                             background: 'rgba(255,255,255,0.2)',
                             border: 'none',

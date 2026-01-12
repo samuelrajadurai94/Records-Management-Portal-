@@ -44,18 +44,37 @@ async def create_engine(
         temp_dir = tempfile.mkdtemp(prefix=f"engine_{serial_number}_")
         upload_path = temp_dir # Override path to point to temp dir
         
+        # First, collect all file paths to determine the common base folder
+        file_list = []
         for file in files:
-            # Construct strict path: temp_dir/filename (or relative path if provided)
-            # Browser uploads usually give filename. If webkitdirectory, filename might contain slashes? 
-            # request.files usually flattens, but let's check. 
-            # For simplicity, we save flat or assume filename has structure. 
-            # Actually, standard upload usually gives basename. 
-            # We will save them flat in the temp folder for now, or handle relative paths if available.
-            # Using file.filename.
+            relative_path = file.filename.replace('\\', '/')
+            safe_relative_path = os.path.normpath(relative_path).lstrip(os.sep).lstrip('/')
+            file_list.append((file, safe_relative_path))
+        
+        # Determine the base folder name (first component of the path)
+        # All files should have the same base folder when using webkitdirectory
+        base_folder = None
+        if file_list:
+            first_path = file_list[0][1]
+            parts = first_path.split(os.sep)
+            if len(parts) > 1:
+                base_folder = parts[0]
+        
+        # Now save files, stripping the base folder
+        for file, safe_relative_path in file_list:
+            # Strip the base folder name to upload only its contents
+            if base_folder and safe_relative_path.startswith(base_folder + os.sep):
+                # Remove the base folder from the path
+                path_without_base = safe_relative_path[len(base_folder) + 1:]
+            else:
+                # If there's no base folder or path doesn't start with it, use as-is
+                path_without_base = safe_relative_path
             
-            # sanitize filename
-            safe_filename = os.path.basename(file.filename)
-            file_destination = os.path.join(temp_dir, safe_filename)
+            # Construct full file path
+            file_destination = os.path.join(temp_dir, path_without_base)
+            
+            # Create subdirectories if they don't exist
+            os.makedirs(os.path.dirname(file_destination), exist_ok=True)
             
             with open(file_destination, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
