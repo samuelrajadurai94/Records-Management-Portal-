@@ -8,28 +8,45 @@ export const AuthProvider = ({ children }) => {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // Check if token exists and is valid (optional: call a /me endpoint)
-        // For now, just check presence of token
-        const token = localStorage.getItem('token');
-        if (token) {
-            // ideally decode token or fetch user
-            setUser({ username: "Company" }); // Placeholder
-        }
-        setLoading(false);
+        const fetchMe = async () => {
+            const token = localStorage.getItem('token');
+            if (token) {
+                try {
+                    const response = await api.get('/auth/me');
+                    setUser(response.data);
+                } catch (error) {
+                    console.error("Failed to fetch user", error);
+                    localStorage.removeItem('token');
+                    setUser(null);
+                }
+            }
+            setLoading(false);
+        };
+
+        fetchMe();
     }, []);
 
-    const login = async (username, password) => {
+    const login = async (email, password) => {
         const formData = new FormData();
-        formData.append('username', username);
+        formData.append('username', email);
         formData.append('password', password);
 
         const response = await api.post('/auth/login', formData);
         localStorage.setItem('token', response.data.access_token);
-        setUser({ username });
+
+        // Fetch full user profile
+        const userRes = await api.get('/auth/me');
+        setUser(userRes.data);
     };
 
-    const register = async (username, password) => {
-        await api.post('/auth/register', { username, password });
+    const register = async (company_name, email, password) => {
+        await api.post('/auth/register', {
+            company_name,
+            email,
+            password
+        });
+        // Registration successful, no auto-login implied by API, but we could if we wanted.
+        // For now, user is redirected to login page by component.
     };
 
     const logout = () => {

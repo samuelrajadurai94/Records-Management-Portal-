@@ -5,6 +5,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import EngineDetails from './pages/EngineDetails';
+import LandingPage from './pages/LandingPage';
 
 const PrivateRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -17,10 +18,11 @@ function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
+          <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route
-            path="/"
+            path="/dashboard"
             element={
               <PrivateRoute>
                 <Dashboard />

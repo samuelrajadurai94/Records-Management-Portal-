@@ -9,3 +9,4 @@ argon2-cffi
 aiofiles
 anyio
 boxsdk
+psycopg2-binary

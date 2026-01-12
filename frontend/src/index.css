@@ -1,22 +1,34 @@
 :root {
-  --primary: #00B4D8;
-  /* Sky Blue */
-  --secondary: #0077B6;
-  /* Darker Blue */
-  --accent: #90E0EF;
-  /* Light Blue Accent */
-  --background: #CAF0F8;
-  /* Very Light Blue Background */
+  --primary: #023e8a;
+  /* Deep Royal Blue */
+  --secondary: #0077b6;
+  /* Medium Blue */
+  --accent: #0096c7;
+  /* Brighter Blue */
+
+  --background: #9EE4EF;
+  /* Light Blue from image */
   --surface: #ffffff;
+
   --text-main: #03045E;
-  /* Deep Blue Text */
+  /* Very Deep Navy for text */
   --text-dim: #5c677d;
-  --glass: rgba(255, 255, 255, 0.85);
-  /* Increased opacity for cleaner look */
-  --glass-border: rgba(255, 255, 255, 0.6);
-  --shadow-sm: 0 2px 4px rgba(0, 180, 216, 0.1);
-  --shadow-md: 0 4px 6px rgba(0, 180, 216, 0.15);
-  --shadow-lg: 0 10px 15px rgba(0, 180, 216, 0.15);
+
+  --glass: rgba(255, 255, 255, 0.4);
+  /* More transparent for that clean look */
+  --glass-border: rgba(255, 255, 255, 0.3);
+
+  --shadow-sm: 0 2px 4px rgba(2, 62, 138, 0.05);
+  --shadow-md: 0 4px 6px rgba(2, 62, 138, 0.1);
+  --shadow-lg: 0 10px 15px rgba(2, 62, 138, 0.1);
+}
+
+.center-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
 }
 
 * {
@@ -30,11 +42,6 @@ body {
   background-color: var(--background);
   color: var(--text-main);
   line-height: 1.5;
-  /* Subtle gradient mesh */
-  background-image:
-    radial-gradient(at 0% 0%, rgba(144, 224, 239, 0.4) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(0, 180, 216, 0.2) 0px, transparent 50%);
-  background-attachment: fixed;
 }
 
 /* Glassmorphism Utilities */

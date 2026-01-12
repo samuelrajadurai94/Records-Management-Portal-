@@ -4,10 +4,13 @@ from datetime import datetime
 
 # User Schemas
 class UserBase(BaseModel):
-    username: str
+    email: str
+    company_name: Optional[str] = None
+    role: str = "client"
 
 class UserCreate(UserBase):
     password: str
+    confirm_password: Optional[str] = None # Used for validation in API if needed
 
 class User(UserBase):
     id: int
@@ -30,12 +33,13 @@ class EngineBase(BaseModel):
     serial_number: str
 
 class EngineCreate(EngineBase):
-    pass
+    local_path: Optional[str] = None
 
 class Engine(EngineBase):
     id: int
     owner_id: int
     created_at: datetime
+    box_folder_id: Optional[str] = None
     
     class Config:
         from_attributes = True

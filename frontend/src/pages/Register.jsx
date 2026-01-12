@@ -1,25 +1,26 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
-import { Eye, EyeOff, CheckCircle } from 'lucide-react';
+import { Plane, Eye, EyeOff, AlertCircle, CheckCircle } from 'lucide-react';
 
 export default function Register() {
-    const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
-    const [showPass, setShowPass] = useState(false);
-    const [showConfirmPass, setShowConfirmPass] = useState(false);
+    const { register } = useAuth();
+    const navigate = useNavigate();
+    const [formData, setFormData] = useState({
+        company_name: '',
+        email: '',
+        password: '',
+        confirm_password: ''
+    });
+    const [showPassword, setShowPassword] = useState(false);
+    const [showConfirm, setShowConfirm] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
 
-    const { register } = useAuth();
-    const navigate = useNavigate();
-
     const validatePassword = (pwd) => {
-        if (pwd.length < 8) return "Password must be at least 8 characters long";
-        if (!/[A-Z]/.test(pwd)) return "Password must contain at least one uppercase letter";
-        if (!/[!@#$%^&*(),.?":{}|<>]/.test(pwd)) return "Password must contain at least one special symbol";
-        return null;
+        // Min 8 chars, 1 caps, 1 symbol
+        const regex = /^(?=.*[A-Z])(?=.*[!@#$&*])(?=.*[0-9].*)(?=.{8,})/;
+        return regex.test(pwd);
     };
 
     const handleSubmit = async (e) => {
@@ -27,106 +28,116 @@ export default function Register() {
         setError('');
         setSuccess('');
 
-        const pwdError = validatePassword(password);
-        if (pwdError) {
-            setError(pwdError);
+        if (!validatePassword(formData.password)) {
+            setError("Password must contain 1 Uppercase Letter, 1 Symbol, and be at least 8 characters long.");
             return;
         }
 
-        if (password !== confirmPassword) {
-            setError("Passwords do not match");
+        if (formData.password !== formData.confirm_password) {
+            setError("Passwords do not match.");
             return;
         }
 
         try {
-            await register(username, password);
-            setSuccess("Registration Successful! Redirecting to login...");
+            await register(formData.company_name, formData.email, formData.password);
+            setSuccess("Registration successful! Redirecting to login...");
             setTimeout(() => {
-                navigate('/login');
+                navigate('/login?role=client');
             }, 2000);
         } catch (err) {
-            setError('Registration failed. Username may be taken.');
+            console.error(err);
+            setError('Registration failed. Email might be already registered.');
         }
     };
 
     return (
-        <div className="container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
-            <div className="glass-panel animate-fade-in" style={{ padding: '3rem', width: '100%', maxWidth: '500px' }}>
+        <div className="center-container">
+            <div className="glass-panel animate-scale-in" style={{ width: '400px', padding: '2.5rem' }}>
                 <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-                    <h1 className="logo-text">Create Account</h1>
-                    <p style={{ color: 'var(--text-dim)' }}>SPI AVIATION RECORD MANAGEMENT</p>
+                    <div style={{ display: 'inline-flex', padding: '12px', background: 'var(--primary)', borderRadius: '16px', marginBottom: '1rem' }}>
+                        <Plane color="white" size={32} />
+                    </div>
+                    <h2 style={{ margin: 0, color: 'var(--primary)' }}>Create Account</h2>
+                    <p style={{ color: 'var(--text-dim)', marginTop: '0.5rem' }}>Register your company with SPI Aviations</p>
                 </div>
 
-                {error && (
-                    <div style={{ background: '#ffebeb', color: '#d00000', padding: '12px', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.9rem', textAlign: 'center', fontWeight: 500 }}>
-                        {error}
-                    </div>
-                )}
+                {error && <div style={{ background: '#ffebee', color: '#c62828', padding: '12px', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px' }}><AlertCircle size={16} /> {error}</div>}
+                {success && <div style={{ background: '#e8f5e9', color: '#2e7d32', padding: '12px', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px' }}><CheckCircle size={16} /> {success}</div>}
 
-                {success && (
-                    <div style={{ background: '#e6fffa', color: '#006d5b', padding: '12px', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.9rem', textAlign: 'center', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                        <CheckCircle size={18} /> {success}
-                    </div>
-                )}
-
-                <form onSubmit={handleSubmit}>
-                    <div style={{ marginBottom: '1rem' }}>
-                        <label style={{ fontWeight: 600, fontSize: '0.9rem', marginLeft: '4px' }}>Company Name</label>
+                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: 600, color: 'var(--text-main)', fontSize: '0.9rem' }}>Company Name</label>
                         <input
-                            type="text"
-                            placeholder="Unique Company ID"
-                            value={username}
-                            onChange={e => setUsername(e.target.value)}
+                            placeholder="e.g. Acme Aviation"
+                            value={formData.company_name}
+                            onChange={e => setFormData({ ...formData, company_name: e.target.value })}
+                            required
                         />
                     </div>
 
-                    <div style={{ marginBottom: '1rem', position: 'relative' }}>
-                        <label style={{ fontWeight: 600, fontSize: '0.9rem', marginLeft: '4px' }}>Password</label>
-                        <div style={{ marginBottom: '6px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                            Must be 8+ chars, 1 uppercase, 1 symbol
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: 600, color: 'var(--text-main)', fontSize: '0.9rem' }}>Email Address</label>
+                        <input
+                            type="email"
+                            placeholder="name@company.com"
+                            value={formData.email}
+                            onChange={e => setFormData({ ...formData, email: e.target.value })}
+                            required
+                        />
+                    </div>
+
+                    <div style={{ position: 'relative' }}>
+                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: 600, color: 'var(--text-main)', fontSize: '0.9rem' }}>Password</label>
+                        <div style={{ position: 'relative' }}>
+                            <input
+                                type={showPassword ? "text" : "password"}
+                                placeholder="Create a password"
+                                value={formData.password}
+                                onChange={e => setFormData({ ...formData, password: e.target.value })}
+                                required
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword(!showPassword)}
+                                style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)' }}
+                            >
+                                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                            </button>
                         </div>
-                        <input
-                            type={showPass ? "text" : "password"}
-                            placeholder="Create password"
-                            value={password}
-                            onChange={e => setPassword(e.target.value)}
-                            style={{ paddingRight: '40px' }}
-                        />
-                        <button
-                            type="button"
-                            onClick={() => setShowPass(!showPass)}
-                            style={{ position: 'absolute', right: '12px', top: '70px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)' }}
-                        >
-                            {showPass ? <EyeOff size={20} /> : <Eye size={20} />}
-                        </button>
                     </div>
 
-                    <div style={{ marginBottom: '2rem', position: 'relative' }}>
-                        <label style={{ fontWeight: 600, fontSize: '0.9rem', marginLeft: '4px' }}>Confirm Password</label>
-                        <input
-                            type={showConfirmPass ? "text" : "password"}
-                            placeholder="Confirm password"
-                            value={confirmPassword}
-                            onChange={e => setConfirmPassword(e.target.value)}
-                            style={{ paddingRight: '40px' }}
-                        />
-                        <button
-                            type="button"
-                            onClick={() => setShowConfirmPass(!showConfirmPass)}
-                            style={{ position: 'absolute', right: '12px', top: '38px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)' }}
-                        >
-                            {showConfirmPass ? <EyeOff size={20} /> : <Eye size={20} />}
-                        </button>
+                    <div style={{ position: 'relative' }}>
+                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: 600, color: 'var(--text-main)', fontSize: '0.9rem' }}>Confirm Password</label>
+                        <div style={{ position: 'relative' }}>
+                            <input
+                                type={showConfirm ? "text" : "password"}
+                                placeholder="Confirm your password"
+                                value={formData.confirm_password}
+                                onChange={e => setFormData({ ...formData, confirm_password: e.target.value })}
+                                required
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowConfirm(!showConfirm)}
+                                style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)' }}
+                            >
+                                {showConfirm ? <EyeOff size={18} /> : <Eye size={18} />}
+                            </button>
+                        </div>
                     </div>
 
-                    <button type="submit" disabled={success} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', opacity: success ? 0.7 : 1 }}>
-                        {success ? 'Success!' : 'Get Started'}
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', background: 'rgba(0,0,0,0.03)', padding: '8px', borderRadius: '6px' }}>
+                        <strong>Note:</strong> Password must be at least 8 characters long, contain 1 Uppercase Letter, and 1 Symbol.
+                    </div>
+
+                    <button type="submit" className="btn btn-primary" style={{ marginTop: '0.5rem', background: 'var(--primary)', color: 'white' }}>
+                        Register
                     </button>
                 </form>
 
-                <div style={{ marginTop: '1.5rem', textAlign: 'center', fontSize: '0.9rem' }}>
-                    Already have an account? <Link to="/login" style={{ color: 'var(--text-main)', fontWeight: '700' }}>Log in</Link>
-                </div>
+                <p style={{ textAlign: 'center', marginTop: '1.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
+                    Already have an account? <Link to="/login" style={{ color: 'var(--primary)', fontWeight: 600 }}>Sign In</Link>
+                </p>
             </div>
         </div>
     );

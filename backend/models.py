@@ -7,7 +7,9 @@ class User(Base):
     __tablename__ = "users"
     
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True) # Company Name
+    email = Column(String, unique=True, index=True) # Used for login
+    company_name = Column(String) 
+    role = Column(String, default="client") # 'client' or 'spi'
     hashed_password = Column(String)
     is_active = Column(Boolean, default=True)
 
@@ -21,6 +23,7 @@ class Engine(Base):
     serial_number = Column(String, unique=True, index=True)
     owner_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    box_folder_id = Column(String, nullable=True)
 
     owner = relationship("User", back_populates="engines")
     files = relationship("FileMetadata", back_populates="engine")
