@@ -183,8 +183,8 @@ class BoxService:
             print(f"Error getting folder items for {folder_id}: {e}")
             return {"folders": [], "files": []}
 
-    def get_folder_hierarchy(self, folder_id, max_depth=3, current_depth=0):
-        """Recursively build folder tree structure"""
+    def get_folder_hierarchy(self, folder_id, max_depth=10, current_depth=0):
+        """Recursively build folder tree structure with files included"""
         if not self.client or current_depth >= max_depth:
             return None
         
@@ -193,6 +193,8 @@ class BoxService:
             items = self.get_folder_items(folder_id)
             
             children = []
+            
+            # Add subfolders to children
             for subfolder in items["folders"]:
                 child_hierarchy = self.get_folder_hierarchy(
                     subfolder["id"], 
@@ -201,6 +203,16 @@ class BoxService:
                 )
                 if child_hierarchy:
                     children.append(child_hierarchy)
+            
+            # Add files to children
+            for file in items["files"]:
+                children.append({
+                    "id": file["id"],
+                    "name": file["name"],
+                    "type": "file",
+                    "size": file.get("size", 0),
+                    "modified_at": file.get("modified_at", None)
+                })
             
             return {
                 "id": folder_id,
@@ -219,8 +231,12 @@ class BoxService:
             return None
         
         try:
-            download_url = self.client.files.get_file_download_url(file_id)
-            return download_url
+            # Get file with download_url field
+            file = self.client.files.get_file_by_id(file_id, fields=['download_url'])
+            if hasattr(file, 'download_url') and file.download_url:
+                return file.download_url
+            # Fallback: construct download URL manually
+            return f"https://api.box.com/2.0/files/{file_id}/content"
         except Exception as e:
             print(f"Error getting download URL for file {file_id}: {e}")
             return None
@@ -241,6 +257,29 @@ class BoxService:
             }
         except Exception as e:
             print(f"Error getting file info for {file_id}: {e}")
+            return None
+
+    def get_file_embed_link(self, file_id):
+        """Get expiring embed link for file preview"""
+        if not self.client:
+            return None
+        
+        try:
+            # Request the expiring_embed_link field
+            file_info = self.client.files.get_file_by_id(
+                file_id, 
+                fields=["expiring_embed_link"]
+            )
+            
+            if hasattr(file_info, 'expiring_embed_link') and file_info.expiring_embed_link:
+                return file_info.expiring_embed_link.url
+            
+            return None
+                
+        except Exception as e:
+            print(f"Error getting embed link for file {file_id}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
 box_service = BoxService()

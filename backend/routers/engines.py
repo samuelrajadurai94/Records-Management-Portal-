@@ -155,8 +155,13 @@ def get_file_url(engine_id: int, file_id: str, db: Session = Depends(database.ge
     
     file_info = box_service.get_file_info(file_id)
     download_url = box_service.get_file_download_url(file_id)
+    embed_link = box_service.get_file_embed_link(file_id)
     
-    if not file_info or not download_url:
+    if not file_info:
         raise HTTPException(status_code=404, detail="File not found or unavailable")
     
-    return {"file_info": file_info, "download_url": download_url}
+    return {
+        "file_info": file_info, 
+        "download_url": download_url,
+        "embed_link": embed_link
+    }

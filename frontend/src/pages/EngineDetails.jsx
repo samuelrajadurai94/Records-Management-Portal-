@@ -10,13 +10,12 @@ export default function EngineDetails() {
     const { user, logout } = useAuth();
     const [engine, setEngine] = useState(null);
     const [folderStructure, setFolderStructure] = useState(null);
-    const [currentFolderId, setCurrentFolderId] = useState(null);
-    const [currentFiles, setCurrentFiles] = useState([]);
-    const [currentFolders, setCurrentFolders] = useState([]);
     const [selectedFile, setSelectedFile] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [loading, setLoading] = useState(true);
     const [expandedFolders, setExpandedFolders] = useState({});
+    const [sidebarWidth, setSidebarWidth] = useState(280);
+    const [isResizing, setIsResizing] = useState(false);
 
     useEffect(() => {
         fetchEngineData();
@@ -32,13 +31,9 @@ export default function EngineDetails() {
             if (engRes.data.box_folder_id) {
                 const structureRes = await api.get(`/engines/${id}/box-structure`);
                 setFolderStructure(structureRes.data);
-                setCurrentFolderId(structureRes.data.id);
 
                 // Auto-expand root folder
                 setExpandedFolders({ [structureRes.data.id]: true });
-
-                // Load root folder contents
-                loadFolderContents(structureRes.data.id);
             }
         } catch (err) {
             console.error(err);
@@ -48,17 +43,7 @@ export default function EngineDetails() {
         }
     };
 
-    const loadFolderContents = async (folderId) => {
-        try {
-            const res = await api.get(`/engines/${id}/box-folder/${folderId}`);
-            setCurrentFiles(res.data.files || []);
-            setCurrentFolders(res.data.folders || []);
-            setCurrentFolderId(folderId);
-            setSelectedFile(null);
-        } catch (err) {
-            console.error(err);
-        }
-    };
+
 
     const handleFileClick = async (file) => {
         try {
@@ -77,68 +62,137 @@ export default function EngineDetails() {
         }));
     };
 
-    const FolderTreeItem = ({ folder, level = 0 }) => {
-        const isExpanded = expandedFolders[folder.id];
-        const isActive = currentFolderId === folder.id;
+    const handleMouseDown = (e) => {
+        setIsResizing(true);
+        e.preventDefault();
+    };
+
+    const handleMouseMove = (e) => {
+        if (!isResizing) return;
+        const newWidth = e.clientX;
+        if (newWidth >= 200 && newWidth <= 500) {
+            setSidebarWidth(newWidth);
+        }
+    };
+
+    const handleMouseUp = () => {
+        setIsResizing(false);
+    };
+
+    useEffect(() => {
+        if (isResizing) {
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+        } else {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        }
+        return () => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [isResizing]);
+
+    const FileTreeItem = ({ file, level = 0 }) => {
+        const isSelected = selectedFile?.id === file.id;
+
+        return (
+            <div
+                onClick={() => handleFileClick(file)}
+                style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '8px 12px',
+                    paddingLeft: `${12 + level * 20}px`,
+                    cursor: 'pointer',
+                    background: isSelected ? 'var(--primary)' : 'transparent',
+                    color: isSelected ? 'white' : '#333',
+                    borderRadius: '4px',
+                    marginBottom: '2px',
+                    fontWeight: isSelected ? 600 : 400,
+                    fontSize: '0.85rem',
+                    transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                    if (!isSelected) e.currentTarget.style.background = '#f0f0f0';
+                }}
+                onMouseLeave={(e) => {
+                    if (!isSelected) e.currentTarget.style.background = 'transparent';
+                }}
+            >
+                <FileText size={14} style={{ marginRight: '8px', flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {file.name}
+                </span>
+            </div>
+        );
+    };
+
+    const FolderTreeItem = ({ item, level = 0 }) => {
+        // Handle both folders and files
+        if (item.type === 'file') {
+            return <FileTreeItem file={item} level={level} />;
+        }
+
+        // Folder rendering
+        const isExpanded = expandedFolders[item.id];
+        const hasChildren = item.children && item.children.length > 0;
 
         return (
             <div>
                 <div
                     onClick={() => {
-                        toggleFolder(folder.id);
-                        loadFolderContents(folder.id);
+                        if (hasChildren) {
+                            toggleFolder(item.id);
+                        }
                     }}
                     style={{
                         display: 'flex',
                         alignItems: 'center',
                         padding: '8px 12px',
                         paddingLeft: `${12 + level * 20}px`,
-                        cursor: 'pointer',
-                        background: isActive ? 'var(--primary)' : 'transparent',
-                        color: isActive ? 'white' : '#333',
+                        cursor: hasChildren ? 'pointer' : 'default',
+                        background: 'transparent',
+                        color: '#333',
                         borderRadius: '4px',
                         marginBottom: '2px',
-                        fontWeight: isActive ? 600 : 400,
+                        fontWeight: 500,
                         fontSize: '0.9rem',
                         transition: 'all 0.2s'
                     }}
                     onMouseEnter={(e) => {
-                        if (!isActive) e.currentTarget.style.background = '#f0f0f0';
+                        if (hasChildren) e.currentTarget.style.background = '#f0f0f0';
                     }}
                     onMouseLeave={(e) => {
-                        if (!isActive) e.currentTarget.style.background = 'transparent';
+                        e.currentTarget.style.background = 'transparent';
                     }}
                 >
-                    {folder.children && folder.children.length > 0 && (
+                    {hasChildren && (
                         <span style={{ marginRight: '6px', fontSize: '0.8rem' }}>
                             {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         </span>
                     )}
                     {isExpanded ? <FolderOpen size={16} style={{ marginRight: '8px' }} /> : <Folder size={16} style={{ marginRight: '8px' }} />}
-                    <span>{folder.name}</span>
-                    {folder.file_count > 0 && (
+                    <span>{item.name}</span>
+                    {item.file_count > 0 && (
                         <span style={{
                             marginLeft: 'auto',
                             fontSize: '0.75rem',
                             opacity: 0.7,
-                            background: isActive ? 'rgba(255,255,255,0.2)' : '#e0e0e0',
+                            background: '#e0e0e0',
                             padding: '2px 6px',
                             borderRadius: '10px'
                         }}>
-                            {folder.file_count}
+                            {item.file_count}
                         </span>
                     )}
                 </div>
-                {isExpanded && folder.children && folder.children.map(child => (
-                    <FolderTreeItem key={child.id} folder={child} level={level + 1} />
+                {isExpanded && hasChildren && item.children.map(child => (
+                    <FolderTreeItem key={child.id} item={child} level={level + 1} />
                 ))}
             </div>
         );
     };
-
-    const filteredFiles = currentFiles.filter(file =>
-        file.name.toLowerCase().includes(searchQuery.toLowerCase())
-    );
 
     if (loading) {
         return (
@@ -227,133 +281,89 @@ export default function EngineDetails() {
                 </div>
             </div>
 
+
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                {/* Sidebar - Folder Tree */}
+                {/* Sidebar - Complete Folder & File Tree */}
                 <div style={{
-                    width: '280px',
+                    width: `${sidebarWidth}px`,
                     background: 'white',
                     borderRight: '1px solid #e0e0e0',
                     overflowY: 'auto',
-                    padding: '1rem 0.5rem'
+                    padding: '1rem 0.5rem',
+                    position: 'relative'
                 }}>
-                    {folderStructure && <FolderTreeItem folder={folderStructure} />}
+                    {folderStructure && <FolderTreeItem item={folderStructure} />}
+
+                    {/* Resize Handle */}
+                    <div
+                        onMouseDown={handleMouseDown}
+                        style={{
+                            position: 'absolute',
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                            width: '5px',
+                            cursor: 'col-resize',
+                            background: isResizing ? 'var(--primary)' : 'transparent',
+                            transition: 'background 0.2s'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(2,62,138,0.3)'}
+                        onMouseLeave={(e) => !isResizing && (e.currentTarget.style.background = 'transparent')}
+                    />
                 </div>
 
-                {/* Main Content - File List */}
-                <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                        <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#333' }}>
-                            Total Files: {filteredFiles.length}
-                        </h3>
-                    </div>
-
-                    {/* Folders */}
-                    {currentFolders.length > 0 && (
-                        <div style={{ marginBottom: '1.5rem' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '1rem' }}>
-                                {currentFolders.map(folder => (
-                                    <div
-                                        key={folder.id}
-                                        onClick={() => loadFolderContents(folder.id)}
-                                        style={{
-                                            background: 'white',
-                                            padding: '1rem',
-                                            borderRadius: '8px',
-                                            border: '1px solid #e0e0e0',
-                                            cursor: 'pointer',
-                                            display: 'flex',
-                                            flexDirection: 'column',
-                                            alignItems: 'center',
-                                            gap: '8px',
-                                            transition: 'all 0.2s',
-                                            boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
-                                        }}
-                                        onMouseEnter={(e) => {
-                                            e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
-                                            e.currentTarget.style.transform = 'translateY(-2px)';
-                                        }}
-                                        onMouseLeave={(e) => {
-                                            e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)';
-                                            e.currentTarget.style.transform = 'translateY(0)';
-                                        }}
-                                    >
-                                        <Folder size={40} color="#FFC107" />
-                                        <span style={{ fontSize: '0.85rem', textAlign: 'center', wordBreak: 'break-word' }}>
-                                            {folder.name}
-                                        </span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Files */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '1rem' }}>
-                        {filteredFiles.map(file => (
-                            <div
-                                key={file.id}
-                                onClick={() => handleFileClick(file)}
-                                style={{
-                                    background: 'white',
-                                    padding: '1rem',
-                                    borderRadius: '8px',
-                                    border: selectedFile?.id === file.id ? '2px solid var(--primary)' : '1px solid #e0e0e0',
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    alignItems: 'center',
-                                    gap: '8px',
-                                    transition: 'all 0.2s',
-                                    boxShadow: selectedFile?.id === file.id ? '0 4px 12px rgba(2,62,138,0.2)' : '0 1px 3px rgba(0,0,0,0.05)'
-                                }}
-                                onMouseEnter={(e) => {
-                                    if (selectedFile?.id !== file.id) {
-                                        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
-                                        e.currentTarget.style.transform = 'translateY(-2px)';
-                                    }
-                                }}
-                                onMouseLeave={(e) => {
-                                    if (selectedFile?.id !== file.id) {
-                                        e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)';
-                                        e.currentTarget.style.transform = 'translateY(0)';
-                                    }
-                                }}
-                            >
-                                <FileText size={40} color="var(--primary)" />
-                                <span style={{ fontSize: '0.85rem', textAlign: 'center', wordBreak: 'break-word' }}>
-                                    {file.name}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-
-                    {filteredFiles.length === 0 && currentFolders.length === 0 && (
-                        <div style={{ textAlign: 'center', padding: '3rem', color: '#999' }}>
-                            <FileText size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
-                            <p>No files in this folder</p>
+                {/* Main Content - File Preview */}
+                <div style={{
+                    flex: 1,
+                    background: '#f5f5f5',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    overflow: 'hidden',
+                    position: 'relative'
+                }}>
+                    {selectedFile && selectedFile.embed_link ? (
+                        <iframe
+                            src={selectedFile.embed_link}
+                            style={{
+                                width: '100%',
+                                height: '100%',
+                                border: 'none'
+                            }}
+                            title={selectedFile.file_info?.name || selectedFile.name}
+                            allowFullScreen
+                        />
+                    ) : (
+                        <div style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
+                            <FileText size={64} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                            <p style={{ fontSize: '1.1rem', margin: 0 }}>
+                                {selectedFile ? 'Loading preview...' : 'Select a file to preview'}
+                            </p>
                         </div>
                     )}
                 </div>
 
-                {/* File Preview Panel */}
+                {/* File Details Panel */}
                 {selectedFile && (
                     <div style={{
-                        width: '350px',
+                        width: '250px',
                         background: 'white',
                         borderLeft: '1px solid #e0e0e0',
-                        padding: '1.5rem',
-                        overflowY: 'auto'
+                        padding: '1rem',
+                        overflowY: 'auto',
+                        display: 'flex',
+                        flexDirection: 'column'
                     }}>
-                        <h3 style={{ marginTop: 0, fontSize: '1.1rem', marginBottom: '1rem' }}>File Details</h3>
+                        <h3 style={{ marginTop: 0, fontSize: '1rem', marginBottom: '1rem' }}>File Details</h3>
                         <div style={{ marginBottom: '1rem' }}>
-                            <FileText size={64} color="var(--primary)" style={{ marginBottom: '1rem' }} />
-                            <p style={{ fontWeight: 600, marginBottom: '0.5rem', wordBreak: 'break-word' }}>
+                            <FileText size={48} color="var(--primary)" style={{ marginBottom: '0.75rem' }} />
+                            <p style={{ fontWeight: 600, marginBottom: '0.5rem', wordBreak: 'break-word', fontSize: '0.9rem' }}>
                                 {selectedFile.file_info?.name || selectedFile.name}
                             </p>
-                            <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.25rem' }}>
+                            <p style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.25rem' }}>
                                 <strong>Size:</strong> {(selectedFile.file_info?.size / 1024).toFixed(2)} KB
                             </p>
-                            <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.25rem' }}>
+                            <p style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.25rem' }}>
                                 <strong>Type:</strong> {selectedFile.file_info?.extension?.toUpperCase() || 'Unknown'}
                             </p>
                         </div>
@@ -363,9 +373,15 @@ export default function EngineDetails() {
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="btn btn-primary"
-                                style={{ width: '100%', justifyContent: 'center', textDecoration: 'none' }}
+                                style={{
+                                    padding: '8px 16px',
+                                    fontSize: '0.85rem',
+                                    textDecoration: 'none',
+                                    display: 'inline-block',
+                                    alignSelf: 'flex-start'
+                                }}
                             >
-                                Download / View
+                                Download
                             </a>
                         )}
                     </div>
