@@ -8,12 +8,15 @@ export default function Dashboard() {
     const [engines, setEngines] = useState([]);
     const { user, logout } = useAuth();
     const [showAddModal, setShowAddModal] = useState(false);
-    const [newEngine, setNewEngine] = useState({ serial_number: '', files: null });
-    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-    const [uploading, setUploading] = useState(false);
+    const [serialNumber, setSerialNumber] = useState('');
+    const [selectedFiles, setSelectedFiles] = useState(null);
     const [uploadProgress, setUploadProgress] = useState(0);
+    const [isUploading, setIsUploading] = useState(false);
     const [uploadComplete, setUploadComplete] = useState(false);
     const [uploadedEngineSerial, setUploadedEngineSerial] = useState('');
+    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [engineToDelete, setEngineToDelete] = useState(null);
 
     useEffect(() => {
         fetchEngines();
@@ -28,58 +31,100 @@ export default function Dashboard() {
         }
     };
 
+    const [uploadStage, setUploadStage] = useState('');
+
     const handleAddEngine = async (e) => {
         e.preventDefault();
-        setUploading(true);
+        setIsUploading(true);
         setUploadProgress(0);
         setUploadComplete(false);
-        setUploadedEngineSerial(newEngine.serial_number);
+        setUploadedEngineSerial(serialNumber);
+        setUploadStage('Uploading files to server...');
+
+        const currentSerial = serialNumber; // Keep reference
+        let phase1Done = false;
 
         try {
             const formData = new FormData();
-            formData.append('serial_number', newEngine.serial_number);
+            formData.append('serial_number', currentSerial);
 
-            if (newEngine.files) {
-                for (let i = 0; i < newEngine.files.length; i++) {
-                    formData.append('files', newEngine.files[i]);
+            if (selectedFiles) {
+                for (let i = 0; i < selectedFiles.length; i++) {
+                    formData.append('files', selectedFiles[i]);
                 }
             }
 
             // Close modal and show progress
             setShowAddModal(false);
 
-            // Simulate progress while uploading
-            const progressInterval = setInterval(() => {
-                setUploadProgress(prev => {
-                    if (prev >= 90) return prev;
-                    return prev + 10;
-                });
-            }, 500);
+            // 1. Start Polling Immediately (for phase 2 tracking)
+            const pollInterval = setInterval(async () => {
+                try {
+                    // Use encoded serial number for the URL
+                    const encodedSN = encodeURIComponent(currentSerial);
+                    const statusRes = await api.get(`/engines/upload-status/${encodedSN}`);
+                    const serverProgress = statusRes.data.progress; // 0 to 100
 
-            await api.post('/engines/', formData);
+                    if (phase1Done || serverProgress > 0) {
+                        setUploadStage('Syncing with Box...');
+                        // Phase 2: Map 0-100 server progress to 30%-100% of the bar
+                        const totalProgress = 30 + (serverProgress * 0.7);
+                        setUploadProgress(Math.round(totalProgress));
 
-            clearInterval(progressInterval);
-            setUploadProgress(100);
+                        if (serverProgress >= 100) {
+                            clearInterval(pollInterval);
+                            setUploadComplete(true);
+                            setUploadedEngineSerial(currentSerial);
+                            setTimeout(() => setUploadComplete(false), 5000);
+                            fetchEngines();
+                            setIsUploading(false);
+                            setUploadStage('');
+                        }
+                    }
+                } catch (err) {
+                    console.error("Polling error:", err);
+                }
+            }, 1000);
 
-            // Show completion message
-            setTimeout(() => {
-                setUploadComplete(true);
-                fetchEngines();
+            // 2. Trigger the upload (Phase 1 tracking)
+            await api.post('/engines/', formData, {
+                onUploadProgress: (progressEvent) => {
+                    const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                    // Phase 1: Map 0-100 browser progress to 0%-30% of the bar
+                    if (!phase1Done) {
+                        setUploadProgress(Math.round(percentCompleted * 0.3));
+                    }
+                }
+            });
 
-                // Hide completion message after 5 seconds
-                setTimeout(() => {
-                    setUploadComplete(false);
-                    setUploading(false);
-                    setUploadProgress(0);
-                }, 5000);
-            }, 500);
-
-            setNewEngine({ serial_number: '', files: null });
+            phase1Done = true; // Mark Phase 1 as officially complete
+            setSerialNumber('');
+            setSelectedFiles(null);
         } catch (err) {
-            console.error(err);
+            console.error("Upload failed", err);
             alert('Failed to add engine. Check console for details.');
-            setUploading(false);
+            setIsUploading(false);
             setUploadProgress(0);
+            setUploadStage('');
+        }
+    };
+
+    const confirmDeleteEngine = (engine) => {
+        setEngineToDelete(engine);
+        setShowDeleteConfirm(true);
+    };
+
+    const handleDeleteEngine = async () => {
+        if (!engineToDelete) return;
+
+        try {
+            await api.delete(`/engines/${engineToDelete.id}`);
+            setShowDeleteConfirm(false);
+            setEngineToDelete(null);
+            fetchEngines();
+        } catch (error) {
+            console.error(error);
+            alert('Error deleting engine');
         }
     };
 
@@ -173,13 +218,13 @@ export default function Dashboard() {
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <h1 style={{ margin: 0, fontSize: '1.5rem' }}>Aircraft Engines</h1>
-                    <button onClick={() => setShowAddModal(true)} className="btn btn-primary" disabled={uploading}>
+                    <button onClick={() => setShowAddModal(true)} className="btn btn-primary" disabled={isUploading}>
                         <Plus size={18} /> Add New Engine
                     </button>
                 </div>
 
                 {/* Upload Progress Indicator */}
-                {uploading && !uploadComplete && (
+                {isUploading && !uploadComplete && (
                     <div className="glass-panel animate-fade-in" style={{
                         padding: '2rem',
                         marginBottom: '2rem',
@@ -190,7 +235,7 @@ export default function Dashboard() {
                             <Plane size={32} style={{ animation: 'pulse 2s infinite' }} />
                             <div style={{ flex: 1 }}>
                                 <h3 style={{ margin: 0, marginBottom: '0.5rem', color: 'white' }}>
-                                    Uploading Engine: {uploadedEngineSerial}
+                                    {uploadStage || `Uploading Engine: ${uploadedEngineSerial}`}
                                 </h3>
                                 <p style={{ margin: 0, opacity: 0.9, fontSize: '0.9rem' }}>
                                     Please wait while we upload your files to Box...
@@ -250,7 +295,31 @@ export default function Dashboard() {
                                     <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem' }}>SN: {eng.serial_number}</p>
                                     {eng.box_folder_id && <span style={{ fontSize: '0.8rem', color: 'green' }}>Box Linked</span>}
                                 </div>
-                                <Plane size={24} color="var(--text-dim)" />
+                                <div style={{ display: 'flex', gap: '8px', zIndex: 10, position: 'relative' }}>
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            confirmDeleteEngine(eng);
+                                        }}
+                                        style={{
+                                            background: 'transparent',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            padding: '4px',
+                                            color: '#e53e3e',
+                                            opacity: 0.7,
+                                            transition: 'opacity 0.2s',
+                                            zIndex: 20
+                                        }}
+                                        onMouseEnter={(e) => e.currentTarget.style.opacity = 1}
+                                        onMouseLeave={(e) => e.currentTarget.style.opacity = 0.7}
+                                    >
+                                        <Trash2 size={20} style={{ pointerEvents: 'none' }} />
+                                    </button>
+                                    <Plane size={24} color="var(--text-dim)" />
+                                </div>
                             </div>
                             <Link to={`/engine/${eng.id}`} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
                                 View Records <ArrowRight size={16} />
@@ -278,8 +347,8 @@ export default function Dashboard() {
                         <form onSubmit={handleAddEngine}>
                             <input
                                 placeholder="Engine Serial Number"
-                                value={newEngine.serial_number}
-                                onChange={e => setNewEngine({ ...newEngine, serial_number: e.target.value })}
+                                value={serialNumber}
+                                onChange={e => setSerialNumber(e.target.value)}
                                 required
                                 style={{ marginBottom: '1rem' }}
                             />
@@ -295,7 +364,7 @@ export default function Dashboard() {
                                         webkitdirectory=""
                                         directory=""
                                         multiple
-                                        onChange={(e) => setNewEngine({ ...newEngine, files: e.target.files })}
+                                        onChange={(e) => setSelectedFiles(e.target.files)}
                                         style={{
                                             opacity: 0, position: 'absolute', top: 0, left: 0,
                                             width: '100%', height: '100%', cursor: 'pointer'
@@ -306,8 +375,8 @@ export default function Dashboard() {
                                         padding: '16px', textAlign: 'center', color: 'var(--primary)', fontWeight: 600, pointerEvents: 'none',
                                         transition: 'all 0.2s ease'
                                     }}>
-                                        {newEngine.files && newEngine.files.length > 0 ?
-                                            `✓ ${newEngine.files.length} files selected` :
+                                        {selectedFiles && selectedFiles.length > 0 ?
+                                            `✓ ${selectedFiles.length} files selected` :
                                             '📁 Click to Select Folder'
                                         }
                                     </div>
@@ -319,12 +388,56 @@ export default function Dashboard() {
                             </div>
 
                             <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
-                                <button type="button" onClick={() => setShowAddModal(false)} className="btn btn-outline" style={{ flex: 1 }} disabled={uploading}>Cancel</button>
-                                <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={uploading}>
-                                    {uploading ? 'Uploading...' : 'Add'}
+                                <button type="button" onClick={() => setShowAddModal(false)} className="btn btn-outline" style={{ flex: 1 }} disabled={isUploading}>Cancel</button>
+                                <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={isUploading}>
+                                    {isUploading ? 'Uploading...' : 'Add Engine'}
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {showDeleteConfirm && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center',
+                    backdropFilter: 'blur(4px)', zIndex: 100
+                }}>
+                    <div className="glass-panel animate-fade-in" style={{ padding: '2rem', width: '400px', background: 'white', textAlign: 'center' }}>
+                        <div style={{ width: '60px', height: '60px', background: '#ffebeb', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
+                            <Trash2 size={32} color="#e53e3e" />
+                        </div>
+
+                        <h2 style={{ marginBottom: '0.5rem', color: '#1a202c' }}>Delete Engine?</h2>
+
+                        <p style={{ color: '#718096', marginBottom: '2rem' }}>
+                            Are you sure you want to delete <strong style={{ color: '#2d3748' }}>{engineToDelete?.model_name}</strong>?<br />
+                            This action cannot be undone and will delete all associated files from Box.
+                        </p>
+
+                        <div style={{ display: 'flex', gap: '1rem' }}>
+                            <button
+                                onClick={() => setShowDeleteConfirm(false)}
+                                className="btn btn-outline"
+                                style={{ flex: 1 }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleDeleteEngine}
+                                className="btn"
+                                style={{
+                                    flex: 1,
+                                    background: '#e53e3e',
+                                    color: 'white',
+                                    border: 'none'
+                                }}
+                            >
+                                Delete Engine
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

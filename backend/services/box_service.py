@@ -98,8 +98,8 @@ class BoxService:
             print(f"Error uploading file {file_name}: {e}")
             return None
 
-    def upload_folder_contents(self, parent_folder_id, local_path):
-        """Recursively upload folder contents to Box maintaining hierarchy"""
+    def upload_folder_contents(self, parent_folder_id, local_path, progress_callback=None, state={"current": 0, "total": 0}):
+        """Recursively upload folder contents to Box maintaining hierarchy with progress tracking"""
         if not self.client: return
 
         if not os.path.exists(local_path):
@@ -112,6 +112,12 @@ class BoxService:
             if os.path.isfile(item_path):
                 # Upload file to current parent folder
                 self.upload_file(parent_folder_id, item_path)
+                
+                # Update progress
+                state["current"] += 1
+                if progress_callback and state["total"] > 0:
+                    progress = int((state["current"] / state["total"]) * 100)
+                    progress_callback(progress)
             
             elif os.path.isdir(item_path):
                 # Create subfolder and recursively upload its contents
@@ -122,13 +128,13 @@ class BoxService:
                     )
                     print(f"Created subfolder: {item}")
                     # Recursively upload subfolder contents
-                    self.upload_folder_contents(subfolder.id, item_path)
+                    self.upload_folder_contents(subfolder.id, item_path, progress_callback, state)
                 except Exception as e:
                     print(f"Could not create subfolder {item}: {e}")
                     # If folder exists, try to find it and continue
                     pass
 
-    def create_and_upload_engine_folder(self, folder_name, local_path):
+    def create_and_upload_engine_folder(self, folder_name, local_path, progress_callback=None):
         """Creates a root engine folder and uploads contents maintaining hierarchy"""
         if not self.client: return None
         
@@ -142,9 +148,23 @@ class BoxService:
             
             # Upload contents maintaining folder hierarchy
             if local_path and os.path.exists(local_path):
-                print(f"Starting recursive upload from {local_path}...")
+                # Count total files for progress tracking
+                total_files = sum([len(files) for r, d, files in os.walk(local_path)])
+                print(f"Starting recursive upload of {total_files} files from {local_path}...")
+                
+                # Initial progress
+                if progress_callback: progress_callback(0)
+                
                 # Upload the contents of the local folder into the root folder
-                self.upload_folder_contents(root_folder.id, local_path)
+                self.upload_folder_contents(
+                    root_folder.id, 
+                    local_path, 
+                    progress_callback, 
+                    state={"current": 0, "total": total_files}
+                )
+                
+                # Final progress
+                if progress_callback: progress_callback(100)
                 print("Upload complete.")
             
             return root_folder
@@ -281,6 +301,19 @@ class BoxService:
             import traceback
             traceback.print_exc()
             return None
+#client.folders.delete_folder_by_id(item.id, recursive=recursive)
+    def delete_folder(self, folder_id):
+        """Delete a folder and all its contents"""
+        if not self.client:
+            return False
+        
+        try:
+            self.client.folders.delete_folder_by_id(folder_id, recursive=True)
+            print(f"Successfully deleted folder: {folder_id}")
+            return True
+        except Exception as e:
+            print(f"Error deleting folder {folder_id}: {e}")
+            return False
 
 box_service = BoxService()
 

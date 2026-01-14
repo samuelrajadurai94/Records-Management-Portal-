@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Form, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Form, File, UploadFile, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import database, models, schemas, dependencies
@@ -18,8 +18,51 @@ def read_engines(skip: int = 0, limit: int = 100, db: Session = Depends(database
     engines = db.query(models.Engine).filter(models.Engine.owner_id == current_user.id).offset(skip).limit(limit).all()
     return engines
 
+# In-memory storage for upload progress
+# Key: serial_number, Value: percentage (int)
+upload_progress = {}
+
+@router.get("/upload-status/{serial_number}")
+async def get_upload_status(serial_number: str):
+    """Get the current upload progress for a specific engine"""
+    progress = upload_progress.get(serial_number, 0)
+    return {"progress": progress}
+
+async def perform_box_upload(serial_number: str, model_name: str, upload_path: str, engine_id: int, db_session_factory):
+    """Background task to handle Box upload and progress updates"""
+    try:
+        def update_progress(percentage):
+            upload_progress[serial_number] = percentage
+            print(f"Upload progress for {serial_number}: {percentage}%")
+
+        folder_name = f"{serial_number}"
+        uploaded_folder = box_service.create_and_upload_engine_folder(folder_name, upload_path, progress_callback=update_progress)
+        
+        if uploaded_folder:
+            # Update database with Box Folder ID
+            db = db_session_factory()
+            try:
+                engine = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
+                if engine:
+                    engine.box_folder_id = uploaded_folder.id
+                    db.commit()
+            finally:
+                db.close()
+                
+    except Exception as e:
+        print(f"Error in background Box upload: {e}")
+    finally:
+        # Cleanup Temp Dir
+        if upload_path and os.path.exists(upload_path) and "temp" in upload_path:
+            shutil.rmtree(upload_path)
+            print(f"Cleaned up temp directory: {upload_path}")
+        
+        # Keep progress at 100 for a while or remove it? 
+        # For now, let's keep it so the frontend can see '100' once.
+
 @router.post("/", response_model=schemas.Engine)
 async def create_engine(
+    background_tasks: BackgroundTasks,
     serial_number: str = Form(...),
     files: List[UploadFile] = File(None),
     db: Session = Depends(database.get_db),
@@ -33,83 +76,59 @@ async def create_engine(
     # Use serial number as model name
     model_name = serial_number
     
-    box_id = None
     upload_path = None
+    temp_dir = None
 
     # Handle Browser-based File Uploads
-    temp_dir = None
     if files:
         print(f"Receiving {len(files)} files from browser upload...")
-        # Create a temp directory structure
         temp_dir = tempfile.mkdtemp(prefix=f"engine_{serial_number}_")
-        upload_path = temp_dir # Override path to point to temp dir
+        upload_path = temp_dir
         
-        # First, collect all file paths to determine the common base folder
-        file_list = []
         for file in files:
             relative_path = file.filename.replace('\\', '/')
             safe_relative_path = os.path.normpath(relative_path).lstrip(os.sep).lstrip('/')
-            file_list.append((file, safe_relative_path))
-        
-        # Determine the base folder name (first component of the path)
-        # All files should have the same base folder when using webkitdirectory
-        base_folder = None
-        if file_list:
-            first_path = file_list[0][1]
-            parts = first_path.split(os.sep)
+            
+            # Simple stripping of first folder if it exists (common with webkitdirectory)
+            parts = safe_relative_path.split(os.sep)
             if len(parts) > 1:
-                base_folder = parts[0]
-        
-        # Now save files, stripping the base folder
-        for file, safe_relative_path in file_list:
-            # Strip the base folder name to upload only its contents
-            if base_folder and safe_relative_path.startswith(base_folder + os.sep):
-                # Remove the base folder from the path
-                path_without_base = safe_relative_path[len(base_folder) + 1:]
+                path_without_base = os.path.join(*parts[1:])
             else:
-                # If there's no base folder or path doesn't start with it, use as-is
                 path_without_base = safe_relative_path
             
-            # Construct full file path
             file_destination = os.path.join(temp_dir, path_without_base)
-            
-            # Create subdirectories if they don't exist
             os.makedirs(os.path.dirname(file_destination), exist_ok=True)
             
             with open(file_destination, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
         
         print(f"Saved uploaded files to {temp_dir}")
-        print("Files:", os.listdir(temp_dir))
 
-    # Handle Box Upload (only if files were uploaded via browser)
-    if upload_path:
-        print(f"Starting Box upload for: {model_name} (SN: {serial_number}) from {upload_path}")
-        
-        folder_name = f"{serial_number}"
-        uploaded_folder = box_service.create_and_upload_engine_folder(folder_name, upload_path)
-        
-        if uploaded_folder:
-            box_id = uploaded_folder.id
-                
-    # Cleanup Temp Dir
-    if temp_dir and os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
-        print(f"Cleaned up temp directory: {temp_dir}")
-
-    
+    # Create engine in DB first (without Box ID yet)
     db_engine = models.Engine(
         model_name=model_name,
         serial_number=serial_number,
         owner_id=current_user.id,
-        box_folder_id=box_id
+        box_folder_id=None # Will be updated by background task
     )
     db.add(db_engine)
     db.commit()
     db.refresh(db_engine)
     
-    # Fallback Local Storage Creation (after engine is created so we have the ID)
+    # Initialize Local Storage
     storage_service.ensure_directories(db_engine.id)
+
+    # Start Background Upload to Box
+    if upload_path:
+        upload_progress[serial_number] = 0
+        background_tasks.add_task(
+            perform_box_upload, 
+            serial_number, 
+            model_name, 
+            upload_path, 
+            db_engine.id,
+            database.SessionLocal # Reference to session factory
+        )
     
     return db_engine
 
@@ -165,3 +184,24 @@ def get_file_url(engine_id: int, file_id: str, db: Session = Depends(database.ge
         "download_url": download_url,
         "embed_link": embed_link
     }
+
+@router.delete("/{engine_id}")
+def delete_engine(engine_id: int, db: Session = Depends(database.get_db), current_user: models.User = Depends(dependencies.get_current_user)):
+    """Delete an engine and its associated Box folder"""
+    engine = db.query(models.Engine).filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id).first()
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+    
+    # Delete from Box if folder exists
+    if engine.box_folder_id:
+        success = box_service.delete_folder(engine.box_folder_id)
+        if not success:
+            print(f"Warning: Could not delete Box folder {engine.box_folder_id}")
+            # We continue to delete from DB even if Box delete fails, or should we?
+            # Usually better to clean up DB, but maybe log a warning.
+    
+    # Delete from Database
+    db.delete(engine)
+    db.commit()
+    
+    return {"message": "Engine deleted successfully"}
