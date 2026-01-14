@@ -25,7 +25,7 @@ export default function LandingPage() {
             {/* Right Side: Login Options */}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', background: '#E3F2FD', padding: '2rem' }}>
                 <div className="animate-fade-in" style={{ width: '100%', maxWidth: '400px' }}>
-                    <h2 style={{ textAlign: 'center', marginBottom: '2rem', fontSize: '2rem', color: 'var(--primary)' }}>Welcome Portal</h2>
+                    <h2 style={{ textAlign: 'center', marginBottom: '2rem', fontSize: '2rem', color: 'var(--primary)' }}>LOGIN / REGISTER</h2>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                         {/* Client Login Button */}
@@ -33,14 +33,14 @@ export default function LandingPage() {
                             className="btn-hover-effect"
                             style={{ padding: '1.5rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '1rem', border: '2px solid var(--primary)', borderRadius: '16px', transition: 'all 0.3s', background: 'white', color: 'var(--primary)' }}
                             onClick={() => navigate('/login?role=client')}
-                            onMouseOver={(e) => { e.currentTarget.style.background = 'var(--primary)'; e.currentTarget.style.color = 'white' }}
+                            onMouseOver={(e) => { e.currentTarget.style.background = '#00FFFF'; e.currentTarget.style.color = 'white' }}
                             onMouseOut={(e) => { e.currentTarget.style.background = 'white'; e.currentTarget.style.color = 'var(--primary)' }}
                         >
                             <div style={{ padding: '8px' }}>
                                 <Users size={24} color="currentColor" />
                             </div>
                             <div>
-                                <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'inherit' }}>Client Login</h3>
+                                <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'inherit' }}>CLIENT LOGIN</h3>
                             </div>
                         </div>
 
@@ -49,32 +49,36 @@ export default function LandingPage() {
                             className="btn-hover-effect"
                             style={{ padding: '1.5rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '1rem', border: '2px solid var(--primary)', borderRadius: '16px', transition: 'all 0.3s', background: 'white', color: 'var(--primary)' }}
                             onClick={() => navigate('/login?role=spi')}
-                            onMouseOver={(e) => { e.currentTarget.style.background = 'var(--primary)'; e.currentTarget.style.color = 'white' }}
+                            onMouseOver={(e) => { e.currentTarget.style.background = '#00FFFF'; e.currentTarget.style.color = 'white' }}
                             onMouseOut={(e) => { e.currentTarget.style.background = 'white'; e.currentTarget.style.color = 'var(--primary)' }}
                         >
                             <div style={{ padding: '8px' }}>
                                 <ShieldCheck size={24} color="currentColor" />
                             </div>
                             <div>
-                                <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'inherit' }}>SPI Login</h3>
+                                <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'inherit' }}>SPI LOGIN</h3>
                             </div>
                         </div>
                     </div>
 
                     <div style={{ marginTop: '3rem', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        <p style={{ fontSize: '0.9rem', color: '#666' }}>Need an account?</p>
+                        <p style={{ fontSize: '0.9rem', color: '#666' }}>Don't have an account?</p>
                         <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem' }}>
                             <span
                                 style={{ color: 'var(--primary)', cursor: 'pointer', fontWeight: '800', textDecoration: 'underline' }}
                                 onClick={() => navigate('/register')}
+                                onMouseOver={(e) => {e.currentTarget.style.color = 'GREEN' }}
+                                onMouseOut={(e) => {e.currentTarget.style.color = 'var(--primary)' }}
                             >
-                                Client Register
+                                CLIENT REGISTRATION
                             </span>
                             <span
-                                style={{ color: '#666', cursor: 'pointer', fontWeight: '600' }}
+                                style={{ color: 'var(--primary)', cursor: 'pointer', fontWeight: '800',textDecoration: 'underline' }}
                                 onClick={() => navigate('/register')}
+                                onMouseOver={(e) => {e.currentTarget.style.color = 'GREEN' }}
+                                onMouseOut={(e) => {e.currentTarget.style.color = 'var(--primary)' }}
                             >
-                                SPI Register
+                                SPI REGISTRATION
                             </span>
                         </div>
                     </div>

@@ -40,7 +40,7 @@ export default function Login() {
                     }}>
                         {isSpi ? <ShieldCheck color="white" size={32} /> : <Users color="white" size={32} />}
                     </div>
-                    <h2 style={{ margin: 0, color: 'var(--text-main)' }}>{isSpi ? 'SPI Team Login' : 'Client Login'}</h2>
+                    <h2 style={{ margin: 0, color: 'var(--text-main)' }}>{isSpi ? 'SPI Team Login' : 'CLIENT LOGIN'}</h2>
                     <p style={{ color: 'var(--text-dim)', marginTop: '0.5rem' }}>Welcome back to the portal</p>
                 </div>
 
@@ -81,7 +81,7 @@ export default function Login() {
                     </div>
 
                     <button type="submit" className={`btn ${isSpi ? 'btn-outline' : 'btn-primary'}`} style={{ marginTop: '0.5rem', justifyContent: 'center', background: isSpi ? 'transparent' : 'var(--primary)', color: isSpi ? 'var(--primary)' : 'white', borderColor: 'var(--primary)' }}>
-                        Sign In <Lock size={16} style={{ marginLeft: '8px' }} />
+                        LOG IN <Lock size={16} style={{ marginLeft: '8px' }} />
                     </button>
                 </form>
 
@@ -89,6 +89,8 @@ export default function Login() {
                     <button
                         onClick={() => navigate('/')}
                         style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '0.85rem' }}
+                        onMouseOver={(e) => { e.currentTarget.style.background = '#00FFFF'; e.currentTarget.style.color = 'white' }}
+                        onMouseOut={(e) => { e.currentTarget.style.background = 'white'; e.currentTarget.style.color = 'var(--primary)' }}
                     >
                         ← Back to Role Selection
                     </button>

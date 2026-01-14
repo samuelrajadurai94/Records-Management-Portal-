@@ -17,6 +17,8 @@ export default function Dashboard() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [engineToDelete, setEngineToDelete] = useState(null);
+    const [deleteComplete, setDeleteComplete] = useState(false);
+    const [deletedEngineSerial, setDeletedEngineSerial] = useState('');
 
     useEffect(() => {
         fetchEngines();
@@ -66,7 +68,7 @@ export default function Dashboard() {
                     const serverProgress = statusRes.data.progress; // 0 to 100
 
                     if (phase1Done || serverProgress > 0) {
-                        setUploadStage('Syncing with Box...');
+                        setUploadStage('Uploading your files...');
                         // Phase 2: Map 0-100 server progress to 30%-100% of the bar
                         const totalProgress = 30 + (serverProgress * 0.7);
                         setUploadProgress(Math.round(totalProgress));
@@ -117,10 +119,17 @@ export default function Dashboard() {
     const handleDeleteEngine = async () => {
         if (!engineToDelete) return;
 
+        const serial = engineToDelete.serial_number;
         try {
             await api.delete(`/engines/${engineToDelete.id}`);
             setShowDeleteConfirm(false);
             setEngineToDelete(null);
+
+            // Show success message
+            setDeletedEngineSerial(serial);
+            setDeleteComplete(true);
+            setTimeout(() => setDeleteComplete(false), 5000);
+
             fetchEngines();
         } catch (error) {
             console.error(error);
@@ -219,7 +228,7 @@ export default function Dashboard() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <h1 style={{ margin: 0, fontSize: '1.5rem' }}>Aircraft Engines</h1>
                     <button onClick={() => setShowAddModal(true)} className="btn btn-primary" disabled={isUploading}>
-                        <Plus size={18} /> Add New Engine
+                        <Plus size={18} /> ADD NEW ENGINE
                     </button>
                 </div>
 
@@ -238,7 +247,7 @@ export default function Dashboard() {
                                     {uploadStage || `Uploading Engine: ${uploadedEngineSerial}`}
                                 </h3>
                                 <p style={{ margin: 0, opacity: 0.9, fontSize: '0.9rem' }}>
-                                    Please wait while we upload your files to Box...
+                                    Please wait while we upload your files...
                                 </p>
                             </div>
                         </div>
@@ -282,6 +291,25 @@ export default function Dashboard() {
                         </h3>
                         <p style={{ margin: 0, fontSize: '1.1rem', opacity: 0.95 }}>
                             Engine <strong>{uploadedEngineSerial}</strong> has been successfully uploaded to Box.
+                        </p>
+                    </div>
+                )}
+
+                {/* Delete Complete Message */}
+                {deleteComplete && (
+                    <div className="glass-panel animate-fade-in" style={{
+                        padding: '1.5rem',
+                        marginBottom: '2rem',
+                        background: 'linear-gradient(135deg, #f85032 0%, #e73827 100%)',
+                        color: 'white',
+                        textAlign: 'center'
+                    }}>
+                        <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🗑️</div>
+                        <h3 style={{ margin: 0, marginBottom: '0.5rem', fontSize: '1.2rem', color: 'white' }}>
+                            Folder Deleted Successfully
+                        </h3>
+                        <p style={{ margin: 0, fontSize: '1rem', opacity: 0.9 }}>
+                            Engine <strong>{deletedEngineSerial}</strong> and its Box records have been removed.
                         </p>
                     </div>
                 )}

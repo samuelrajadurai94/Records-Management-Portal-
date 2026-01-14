@@ -28,8 +28,8 @@ async def get_upload_status(serial_number: str):
     progress = upload_progress.get(serial_number, 0)
     return {"progress": progress}
 
-async def perform_box_upload(serial_number: str, model_name: str, upload_path: str, engine_id: int, db_session_factory):
-    """Background task to handle Box upload and progress updates"""
+def perform_box_upload(serial_number: str, model_name: str, upload_path: str, engine_id: int, db_session_factory):
+    """Background task to handle Box upload and progress updates (Sync to avoid event loop block)"""
     try:
         def update_progress(percentage):
             upload_progress[serial_number] = percentage
