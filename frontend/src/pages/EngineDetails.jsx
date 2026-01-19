@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import api from '../api';
-import { FileText, Folder, FolderOpen, ChevronRight, ChevronDown, ArrowLeft, Search, SortAsc, CheckSquare, LogOut, Loader } from 'lucide-react';
+import { FileText, Folder, FolderOpen, ChevronRight, ChevronDown, ArrowLeft, Search, SortAsc, CheckSquare, LogOut, Loader, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export default function EngineDetails() {
@@ -27,7 +27,10 @@ export default function EngineDetails() {
             const engRes = await api.get(`/engines/${id}`);
             setEngine(engRes.data);
 
-            // Fetch Box folder structure
+            // Show the page layout immediately after getting metadata
+            setLoading(false);
+
+            // Fetch Box folder structure in background
             if (engRes.data.box_folder_id) {
                 const structureRes = await api.get(`/engines/${id}/box-structure`);
                 setFolderStructure(structureRes.data);
@@ -37,9 +40,8 @@ export default function EngineDetails() {
             }
         } catch (err) {
             console.error(err);
-            alert('Error loading engine data');
-        } finally {
             setLoading(false);
+            alert('Error loading engine data');
         }
     };
 
@@ -55,7 +57,46 @@ export default function EngineDetails() {
         }
     };
 
-    const toggleFolder = (folderId) => {
+    const toggleFolder = async (folderId) => {
+        // Find the folder in the structure to check if it's loaded
+        const isExpanded = !!expandedFolders[folderId];
+
+        if (!isExpanded) {
+            // Check if we need to load children
+            const findAndCheckFolder = (items) => {
+                if (items.id === folderId) return items;
+                if (items.children) {
+                    for (const child of items.children) {
+                        const found = findAndCheckFolder(child);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            };
+
+            const targetFolder = findAndCheckFolder(folderStructure);
+            if (targetFolder && targetFolder.type === 'folder' && targetFolder.isLoaded === false) {
+                try {
+                    const res = await api.get(`/engines/${id}/box-folder/${folderId}`);
+
+                    // Update structure with new children
+                    const updateTree = (item) => {
+                        if (item.id === folderId) {
+                            return { ...item, children: res.data, isLoaded: true };
+                        }
+                        if (item.children) {
+                            return { ...item, children: item.children.map(updateTree) };
+                        }
+                        return item;
+                    };
+
+                    setFolderStructure(updateTree(folderStructure));
+                } catch (err) {
+                    console.error("Error loading folder contents:", err);
+                }
+            }
+        }
+
         setExpandedFolders(prev => ({
             ...prev,
             [folderId]: !prev[folderId]
@@ -106,7 +147,7 @@ export default function EngineDetails() {
                     paddingLeft: `${12 + level * 20}px`,
                     cursor: 'pointer',
                     background: isSelected ? 'var(--primary)' : 'transparent',
-                    color: isSelected ? 'white' : '#333',
+                    color: isSelected ? 'white' : 'var(--primary)',
                     borderRadius: '4px',
                     marginBottom: '2px',
                     fontWeight: isSelected ? 600 : 400,
@@ -114,7 +155,7 @@ export default function EngineDetails() {
                     transition: 'all 0.2s'
                 }}
                 onMouseEnter={(e) => {
-                    if (!isSelected) e.currentTarget.style.background = '#f0f0f0';
+                    if (!isSelected) e.currentTarget.style.background = 'white';
                 }}
                 onMouseLeave={(e) => {
                     if (!isSelected) e.currentTarget.style.background = 'transparent';
@@ -136,24 +177,20 @@ export default function EngineDetails() {
 
         // Folder rendering
         const isExpanded = expandedFolders[item.id];
-        const hasChildren = item.children && item.children.length > 0;
+        const isFolder = item.type === 'folder';
 
         return (
             <div>
                 <div
-                    onClick={() => {
-                        if (hasChildren) {
-                            toggleFolder(item.id);
-                        }
-                    }}
+                    onClick={() => toggleFolder(item.id)}
                     style={{
                         display: 'flex',
                         alignItems: 'center',
                         padding: '8px 12px',
                         paddingLeft: `${12 + level * 20}px`,
-                        cursor: hasChildren ? 'pointer' : 'default',
+                        cursor: 'pointer',
                         background: 'transparent',
-                        color: '#333',
+                        color: 'var(--primary)',
                         borderRadius: '4px',
                         marginBottom: '2px',
                         fontWeight: 500,
@@ -161,17 +198,15 @@ export default function EngineDetails() {
                         transition: 'all 0.2s'
                     }}
                     onMouseEnter={(e) => {
-                        if (hasChildren) e.currentTarget.style.background = '#f0f0f0';
+                        e.currentTarget.style.background = 'white';
                     }}
                     onMouseLeave={(e) => {
                         e.currentTarget.style.background = 'transparent';
                     }}
                 >
-                    {hasChildren && (
-                        <span style={{ marginRight: '6px', fontSize: '0.8rem' }}>
-                            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                        </span>
-                    )}
+                    <span style={{ marginRight: '6px', fontSize: '0.8rem', display: 'flex', alignItems: 'center' }}>
+                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </span>
                     {isExpanded ? <FolderOpen size={16} style={{ marginRight: '8px' }} /> : <Folder size={16} style={{ marginRight: '8px' }} />}
                     <span>{item.name}</span>
                     {item.file_count > 0 && (
@@ -187,9 +222,14 @@ export default function EngineDetails() {
                         </span>
                     )}
                 </div>
-                {isExpanded && hasChildren && item.children.map(child => (
+                {isExpanded && item.children && item.children.length > 0 && item.children.map(child => (
                     <FolderTreeItem key={child.id} item={child} level={level + 1} />
                 ))}
+                {isExpanded && item.isLoaded && (!item.children || item.children.length === 0) && (
+                    <div style={{ paddingLeft: `${32 + level * 20}px`, fontSize: '0.8rem', color: '#999', paddingBottom: '4px' }}>
+                        (Empty)
+                    </div>
+                )}
             </div>
         );
     };
@@ -219,10 +259,10 @@ export default function EngineDetails() {
     }
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#f5f5f5' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#5fe6efff' }}>
             {/* Header */}
             <div style={{
-                background: 'var(--primary)',
+                background: '#5fe6efff',
                 color: 'white',
                 padding: '1rem 1.5rem',
                 display: 'flex',
@@ -236,19 +276,20 @@ export default function EngineDetails() {
                         style={{
                             background: 'rgba(255,255,255,0.2)',
                             border: 'none',
-                            color: 'white',
+                            color: 'var(--primary)',
                             padding: '8px 12px',
                             borderRadius: '4px',
                             cursor: 'pointer',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '6px'
+                            gap: '6px',
+                            fontSize: '1rem'
                         }}
                     >
-                        <ArrowLeft size={16} /> Back
+                        <ArrowLeft size={18} /> Back
                     </button>
                     <h2 style={{ margin: 0, fontSize: '1.2rem' }}>
-                        {engine.serial_number} - {engine.model_name}
+                        {engine.serial_number}
                     </h2>
                 </div>
 
@@ -269,13 +310,13 @@ export default function EngineDetails() {
                             }}
                         />
                     </div>
-                    <button style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '8px 12px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <SortAsc size={16} /> Sort
+                    <button style={{ fontSize: '1rem', background: 'rgba(255,255,255,0.2)', border: 'none', color: 'var(--primary)', padding: '8px 12px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <SortAsc size={18} /> Sort
                     </button>
-                    <button style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', padding: '8px 12px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <CheckSquare size={16} /> Task
+                    <button style={{ fontSize: '1rem', background: 'rgba(255,255,255,0.2)', border: 'none', color: 'var(--primary)', padding: '8px 12px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <CheckSquare size={18} /> Task
                     </button>
-                    <button onClick={logout} style={{ background: 'transparent', border: 'none', color: 'white', padding: '8px', cursor: 'pointer' }}>
+                    <button onClick={logout} style={{ background: 'transparent', border: 'none', color: 'var(--primary)', padding: '8px', cursor: 'pointer' }}>
                         <LogOut size={18} />
                     </button>
                 </div>
@@ -286,7 +327,7 @@ export default function EngineDetails() {
                 {/* Sidebar - Complete Folder & File Tree */}
                 <div style={{
                     width: `${sidebarWidth}px`,
-                    background: 'white',
+                    background: '#E3F2FD',
                     borderRight: '1px solid #e0e0e0',
                     overflowY: 'auto',
                     padding: '1rem 0.5rem',
@@ -315,13 +356,40 @@ export default function EngineDetails() {
                 {/* Main Content - File Preview */}
                 <div style={{
                     flex: 1,
-                    background: '#f5f5f5',
+                    background: 'var(--background)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     overflow: 'hidden',
                     position: 'relative'
                 }}>
+                    {selectedFile && (
+                        <button
+                            onClick={() => setSelectedFile(null)}
+                            style={{
+                                position: 'absolute',
+                                top: '10px',
+                                right: '10px',
+                                background: 'rgba(0,0,0,0.5)',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '50%',
+                                width: '32px',
+                                height: '32px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                cursor: 'pointer',
+                                zIndex: 10,
+                                transition: 'background 0.2s'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.7)'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.5)'}
+                            title="Close preview"
+                        >
+                            <X size={20} />
+                        </button>
+                    )}
                     {selectedFile && selectedFile.embed_link ? (
                         <iframe
                             src={selectedFile.embed_link}
@@ -347,7 +415,7 @@ export default function EngineDetails() {
                 {selectedFile && (
                     <div style={{
                         width: '250px',
-                        background: 'white',
+                        background: '#E3F2FD',
                         borderLeft: '1px solid #e0e0e0',
                         padding: '1rem',
                         overflowY: 'auto',

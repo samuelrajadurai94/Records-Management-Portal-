@@ -157,13 +157,21 @@ def get_box_structure(engine_id: int, db: Session = Depends(database.get_db), cu
 
 @router.get("/{engine_id}/box-folder/{folder_id}")
 def get_folder_contents(engine_id: int, folder_id: str, db: Session = Depends(database.get_db), current_user: models.User = Depends(dependencies.get_current_user)):
-    """Get contents of a specific Box folder"""
+    """Get contents of a specific Box folder formatted for tree expansion"""
     engine = db.query(models.Engine).filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id).first()
     if not engine:
         raise HTTPException(status_code=404, detail="Engine not found")
     
     items = box_service.get_folder_items(folder_id)
-    return items
+    
+    # Format for tree
+    children = []
+    for f in items["folders"]:
+        children.append({"id": f["id"], "name": f["name"], "type": "folder", "children": [], "isLoaded": False})
+    for f in items["files"]:
+        children.append({"id": f["id"], "name": f["name"], "type": "file", "size": f.get("size", 0)})
+        
+    return children
 
 @router.get("/{engine_id}/box-file/{file_id}")
 def get_file_url(engine_id: int, file_id: str, db: Session = Depends(database.get_db), current_user: models.User = Depends(dependencies.get_current_user)):

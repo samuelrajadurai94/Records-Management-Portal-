@@ -179,7 +179,7 @@ export default function Dashboard() {
                     <SidebarItem icon={HardDrive} label="My Storage" count={engines.length} />
                     <SidebarItem icon={Clock} label="Recent Files" />
                     <SidebarItem icon={Star} label="Favorites" />
-                    <SidebarItem icon={Trash2} label="Trash bin" />
+                    
 
                     <div style={{ height: '24px' }}></div>
 
@@ -204,7 +204,7 @@ export default function Dashboard() {
                 <div style={{ padding: '16px', borderTop: '1px solid rgba(0,0,0,0.05)' }}>
                     <button onClick={logout} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', width: '100%' }}>
                         <LogOut size={20} />
-                        {isSidebarOpen && <span>Sign Out</span>}
+                        {isSidebarOpen && <span>Log out</span>}
                     </button>
                 </div>
             </div>

@@ -203,28 +203,29 @@ class BoxService:
             print(f"Error getting folder items for {folder_id}: {e}")
             return {"folders": [], "files": []}
 
-    def get_folder_hierarchy(self, folder_id, max_depth=10, current_depth=0):
-        """Recursively build folder tree structure with files included"""
-        if not self.client or current_depth >= max_depth:
+    def get_folder_hierarchy(self, folder_id):
+        """Get top-level contents of a folder for lazy-loading structure"""
+        if not self.client:
             return None
         
         try:
             folder_info = self.client.folders.get_folder_by_id(folder_id)
             items = self.get_folder_items(folder_id)
             
+            # Form top-level structure
             children = []
             
-            # Add subfolders to children
+            # Add subfolders
             for subfolder in items["folders"]:
-                child_hierarchy = self.get_folder_hierarchy(
-                    subfolder["id"], 
-                    max_depth, 
-                    current_depth + 1
-                )
-                if child_hierarchy:
-                    children.append(child_hierarchy)
+                children.append({
+                    "id": subfolder["id"],
+                    "name": subfolder["name"],
+                    "type": "folder",
+                    "children": [], # Empty for lazy load
+                    "isLoaded": False # Flag for frontend
+                })
             
-            # Add files to children
+            # Add files
             for file in items["files"]:
                 children.append({
                     "id": file["id"],
@@ -239,7 +240,8 @@ class BoxService:
                 "name": folder_info.name,
                 "type": "folder",
                 "children": children,
-                "file_count": len(items["files"])
+                "file_count": len(items["files"]),
+                "isLoaded": True
             }
         except Exception as e:
             print(f"Error getting folder hierarchy for {folder_id}: {e}")
