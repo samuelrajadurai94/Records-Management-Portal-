@@ -16,6 +16,9 @@ export default function EngineDetails() {
     const [expandedFolders, setExpandedFolders] = useState({});
     const [sidebarWidth, setSidebarWidth] = useState(280);
     const [isResizing, setIsResizing] = useState(false);
+    const [activeTab, setActiveTab] = useState('RAW FOLDER');
+
+    const tabs = ['RAW FOLDER', 'FOLDER SEGREGATION', 'OPEN ITEM LIST', 'LLP TRACE', 'MINIPACK'];
 
     useEffect(() => {
         fetchEngineData();
@@ -323,138 +326,182 @@ export default function EngineDetails() {
             </div>
 
 
-            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                {/* Sidebar - Complete Folder & File Tree */}
-                <div style={{
-                    width: `${sidebarWidth}px`,
-                    background: '#E3F2FD',
-                    borderRight: '1px solid #e0e0e0',
-                    overflowY: 'auto',
-                    padding: '1rem 0.5rem',
-                    position: 'relative'
-                }}>
-                    {folderStructure && <FolderTreeItem item={folderStructure} />}
 
-                    {/* Resize Handle */}
-                    <div
-                        onMouseDown={handleMouseDown}
+            {/* Tab Bar */}
+            <div style={{
+                background: '#f1f5f9',
+                borderBottom: '1px solid #e2e8f0',
+                display: 'flex',
+                padding: '0.5rem 1.5rem 0',
+                gap: '1rem'
+            }}>
+                {tabs.map(tab => (
+                    <button
+                        key={tab}
+                        onClick={() => setActiveTab(tab)}
                         style={{
-                            position: 'absolute',
-                            right: 0,
-                            top: 0,
-                            bottom: 0,
-                            width: '5px',
-                            cursor: 'col-resize',
-                            background: isResizing ? 'var(--primary)' : 'transparent',
-                            transition: 'background 0.2s'
+                            padding: '0.75rem 1.25rem',
+                            border: 'none',
+                            background: activeTab === tab ? 'white' : 'transparent',
+                            cursor: 'pointer',
+                            fontSize: '0.8rem',
+                            fontWeight: 800,
+                            color: activeTab === tab ? 'var(--primary)' : '#64748b',
+                            borderBottom: activeTab === tab ? '3px solid var(--primary)' : '3px solid transparent',
+                            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                            letterSpacing: '0.5px',
+                            borderRadius: '8px 8px 0 0',
+                            transform: activeTab === tab ? 'translateY(-2px)' : 'none',
+                            boxShadow: activeTab === tab ? '0 -4px 10px rgba(0,0,0,0.05)' : 'none',
+                            zIndex: activeTab === tab ? 1 : 0
                         }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(2,62,138,0.3)'}
-                        onMouseLeave={(e) => !isResizing && (e.currentTarget.style.background = 'transparent')}
-                    />
-                </div>
+                    >
+                        {tab}
+                    </button>
+                ))}
+            </div>
 
-                {/* Main Content - File Preview */}
-                <div style={{
-                    flex: 1,
-                    background: 'var(--background)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    overflow: 'hidden',
-                    position: 'relative'
-                }}>
-                    {selectedFile && (
-                        <button
-                            onClick={() => setSelectedFile(null)}
+            {activeTab === 'RAW FOLDER' ? (
+                <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+                    {/* Sidebar - Complete Folder & File Tree */}
+                    <div style={{
+                        width: `${sidebarWidth}px`,
+                        background: '#E3F2FD',
+                        borderRight: '1px solid #e0e0e0',
+                        overflowY: 'auto',
+                        padding: '1rem 0.5rem',
+                        position: 'relative'
+                    }}>
+                        {folderStructure && <FolderTreeItem item={folderStructure} />}
+
+                        {/* Resize Handle */}
+                        <div
+                            onMouseDown={handleMouseDown}
                             style={{
                                 position: 'absolute',
-                                top: '10px',
-                                right: '10px',
-                                background: 'rgba(0,0,0,0.5)',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '50%',
-                                width: '32px',
-                                height: '32px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                cursor: 'pointer',
-                                zIndex: 10,
+                                right: 0,
+                                top: 0,
+                                bottom: 0,
+                                width: '5px',
+                                cursor: 'col-resize',
+                                background: isResizing ? 'var(--primary)' : 'transparent',
                                 transition: 'background 0.2s'
                             }}
-                            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.7)'}
-                            onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.5)'}
-                            title="Close preview"
-                        >
-                            <X size={20} />
-                        </button>
-                    )}
-                    {selectedFile && selectedFile.embed_link ? (
-                        <iframe
-                            src={selectedFile.embed_link}
-                            style={{
-                                width: '100%',
-                                height: '100%',
-                                border: 'none'
-                            }}
-                            title={selectedFile.file_info?.name || selectedFile.name}
-                            allowFullScreen
+                            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(2,62,138,0.3)'}
+                            onMouseLeave={(e) => !isResizing && (e.currentTarget.style.background = 'transparent')}
                         />
-                    ) : (
-                        <div style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
-                            <FileText size={64} style={{ opacity: 0.3, marginBottom: '1rem' }} />
-                            <p style={{ fontSize: '1.1rem', margin: 0 }}>
-                                {selectedFile ? 'Loading preview...' : 'Select a file to preview'}
-                            </p>
+                    </div>
+
+                    {/* Main Content - File Preview */}
+                    <div style={{
+                        flex: 1,
+                        background: 'var(--background)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        overflow: 'hidden',
+                        position: 'relative'
+                    }}>
+                        {selectedFile && (
+                            <button
+                                onClick={() => setSelectedFile(null)}
+                                style={{
+                                    position: 'absolute',
+                                    top: '10px',
+                                    right: '10px',
+                                    background: 'rgba(0,0,0,0.5)',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '50%',
+                                    width: '32px',
+                                    height: '32px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    cursor: 'pointer',
+                                    zIndex: 10,
+                                    transition: 'background 0.2s'
+                                }}
+                                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.7)'}
+                                onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.5)'}
+                                title="Close preview"
+                            >
+                                <X size={20} />
+                            </button>
+                        )}
+                        {selectedFile && selectedFile.embed_link ? (
+                            <iframe
+                                src={selectedFile.embed_link}
+                                style={{
+                                    width: '100%',
+                                    height: '100%',
+                                    border: 'none'
+                                }}
+                                title={selectedFile.file_info?.name || selectedFile.name}
+                                allowFullScreen
+                            />
+                        ) : (
+                            <div style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
+                                <FileText size={64} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                                <p style={{ fontSize: '1.1rem', margin: 0 }}>
+                                    {selectedFile ? 'Loading preview...' : 'Select a file to preview'}
+                                </p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* File Details Panel */}
+                    {selectedFile && (
+                        <div style={{
+                            width: '250px',
+                            background: '#E3F2FD',
+                            borderLeft: '1px solid #e0e0e0',
+                            padding: '1rem',
+                            overflowY: 'auto',
+                            display: 'flex',
+                            flexDirection: 'column'
+                        }}>
+                            <h3 style={{ marginTop: 0, fontSize: '1rem', marginBottom: '1rem' }}>File Details</h3>
+                            <div style={{ marginBottom: '1rem' }}>
+                                <FileText size={48} color="var(--primary)" style={{ marginBottom: '0.75rem' }} />
+                                <p style={{ fontWeight: 600, marginBottom: '0.5rem', wordBreak: 'break-word', fontSize: '0.9rem' }}>
+                                    {selectedFile.file_info?.name || selectedFile.name}
+                                </p>
+                                <p style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.25rem' }}>
+                                    <strong>Size:</strong> {(selectedFile.file_info?.size / 1024).toFixed(2)} KB
+                                </p>
+                                <p style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.25rem' }}>
+                                    <strong>Type:</strong> {selectedFile.file_info?.extension?.toUpperCase() || 'Unknown'}
+                                </p>
+                            </div>
+                            {selectedFile.download_url && (
+                                <a
+                                    href={selectedFile.download_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="btn btn-primary"
+                                    style={{
+                                        padding: '8px 16px',
+                                        fontSize: '0.85rem',
+                                        textDecoration: 'none',
+                                        display: 'inline-block',
+                                        alignSelf: 'flex-start'
+                                    }}
+                                >
+                                    Download
+                                </a>
+                            )}
                         </div>
                     )}
                 </div>
-
-                {/* File Details Panel */}
-                {selectedFile && (
-                    <div style={{
-                        width: '250px',
-                        background: '#E3F2FD',
-                        borderLeft: '1px solid #e0e0e0',
-                        padding: '1rem',
-                        overflowY: 'auto',
-                        display: 'flex',
-                        flexDirection: 'column'
-                    }}>
-                        <h3 style={{ marginTop: 0, fontSize: '1rem', marginBottom: '1rem' }}>File Details</h3>
-                        <div style={{ marginBottom: '1rem' }}>
-                            <FileText size={48} color="var(--primary)" style={{ marginBottom: '0.75rem' }} />
-                            <p style={{ fontWeight: 600, marginBottom: '0.5rem', wordBreak: 'break-word', fontSize: '0.9rem' }}>
-                                {selectedFile.file_info?.name || selectedFile.name}
-                            </p>
-                            <p style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.25rem' }}>
-                                <strong>Size:</strong> {(selectedFile.file_info?.size / 1024).toFixed(2)} KB
-                            </p>
-                            <p style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.25rem' }}>
-                                <strong>Type:</strong> {selectedFile.file_info?.extension?.toUpperCase() || 'Unknown'}
-                            </p>
-                        </div>
-                        {selectedFile.download_url && (
-                            <a
-                                href={selectedFile.download_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="btn btn-primary"
-                                style={{
-                                    padding: '8px 16px',
-                                    fontSize: '0.85rem',
-                                    textDecoration: 'none',
-                                    display: 'inline-block',
-                                    alignSelf: 'flex-start'
-                                }}
-                            >
-                                Download
-                            </a>
-                        )}
+            ) : (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--background)' }}>
+                    <div style={{ textAlign: 'center', opacity: 0.5 }}>
+                        <h2 style={{ marginBottom: '1rem' }}>{activeTab}</h2>
+                        <p>This feature is coming soon.</p>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
         </div>
     );
 }

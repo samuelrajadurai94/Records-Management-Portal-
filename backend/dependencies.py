@@ -8,7 +8,7 @@ import schemas, database, models
 
 SECRET_KEY = "supersecretkey" # Change this in production
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 24 hours expiration time 1440 minutes
 
 # Switched to argon2 due to bcrypt compatibility issues with Python 3.12+ and passlib
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
