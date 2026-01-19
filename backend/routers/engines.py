@@ -28,7 +28,7 @@ async def get_upload_status(serial_number: str):
     progress = upload_progress.get(serial_number, 0)
     return {"progress": progress}
 
-def perform_box_upload(serial_number: str, model_name: str, upload_path: str, engine_id: int, db_session_factory):
+def perform_box_upload(serial_number: str, model_name: str, upload_path: str, engine_id: int, db_session_factory, company_name: str = None):
     """Background task to handle Box upload and progress updates (Sync to avoid event loop block)"""
     try:
         def update_progress(percentage):
@@ -36,7 +36,12 @@ def perform_box_upload(serial_number: str, model_name: str, upload_path: str, en
             print(f"Upload progress for {serial_number}: {percentage}%")
 
         folder_name = f"{serial_number}"
-        uploaded_folder = box_service.create_and_upload_engine_folder(folder_name, upload_path, progress_callback=update_progress)
+        uploaded_folder = box_service.create_and_upload_engine_folder(
+            folder_name, 
+            upload_path, 
+            progress_callback=update_progress,
+            company_name=company_name
+        )
         
         if uploaded_folder:
             # Update database with Box Folder ID
@@ -127,7 +132,8 @@ async def create_engine(
             model_name, 
             upload_path, 
             db_engine.id,
-            database.SessionLocal # Reference to session factory
+            database.SessionLocal, # Reference to session factory
+            current_user.company_name
         )
     
     return db_engine

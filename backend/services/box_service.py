@@ -134,30 +134,67 @@ class BoxService:
                     # If folder exists, try to find it and continue
                     pass
 
-    def create_and_upload_engine_folder(self, folder_name, local_path, progress_callback=None):
-        """Creates a root engine folder and uploads contents maintaining hierarchy"""
+    def get_or_create_folder(self, folder_name, parent_id):
+        """Find a folder by name or create it if it doesn't exist"""
         if not self.client: return None
         
         try:
-            # Create the Engine Root Folder (e.g. Serial Number) in the Project Root
+            # List items in parent to find the folder
+            items = self.client.folders.get_folder_items(parent_id)
+            for item in items.entries:
+                if item.type == "folder" and item.name == folder_name:
+                    print(f"Found existing folder: {folder_name} (ID: {item.id})")
+                    return item
+            
+            # Not found, create it
+            new_folder = self.client.folders.create_folder(
+                folder_name,
+                CreateFolderParent(id=parent_id)
+            )
+            print(f"Created new folder: {folder_name} (ID: {new_folder.id})")
+            return new_folder
+        except Exception as e:
+            print(f"Error in get_or_create_folder for {folder_name}: {e}")
+            return None
+
+    def create_and_upload_engine_folder(self, folder_name, local_path, progress_callback=None, company_name=None):
+        """Creates a root engine folder (inside company folder if provided) and uploads contents"""
+        if not self.client: return None
+        
+        try:
+            # Determine parent folder (Root or Company Folder)
+            parent_id = ROOT_FOLDER_ID
+            if company_name:
+                company_folder = self.get_or_create_folder(company_name, ROOT_FOLDER_ID)
+                if company_folder:
+                    parent_id = company_folder.id
+            
+            # Create the Engine Root Folder (e.g. Serial Number)
             root_folder = self.client.folders.create_folder(
                 folder_name,
-                CreateFolderParent(id=ROOT_FOLDER_ID)
+                CreateFolderParent(id=parent_id)
             )
-            print(f"Created Engine Root Folder: {folder_name} (ID: {root_folder.id})")
+            print(f"Created Engine Root Folder: {folder_name} (ID: {root_folder.id}) in parent {parent_id}")
+
+            # Create "RAW FOLDER" inside the Engine Root
+            raw_folder = self.client.folders.create_folder(
+                "RAW FOLDER",
+                CreateFolderParent(id=root_folder.id)
+            )
+            print(f"Created sub-container: RAW FOLDER (ID: {raw_folder.id})")
             
-            # Upload contents maintaining folder hierarchy
+            # Upload contents maintaining folder hierarchy into the RAW FOLDER
             if local_path and os.path.exists(local_path):
                 # Count total files for progress tracking
                 total_files = sum([len(files) for r, d, files in os.walk(local_path)])
-                print(f"Starting recursive upload of {total_files} files from {local_path}...")
+                print(f"Starting recursive upload of {total_files} files into RAW FOLDER...")
                 
                 # Initial progress
                 if progress_callback: progress_callback(0)
                 
-                # Upload the contents of the local folder into the root folder
+                # Upload the contents of the local folder into the RAW FOLDER
                 self.upload_folder_contents(
-                    root_folder.id, 
+                    raw_folder.id, 
                     local_path, 
                     progress_callback, 
                     state={"current": 0, "total": total_files}
