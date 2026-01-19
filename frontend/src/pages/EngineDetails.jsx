@@ -327,33 +327,47 @@ export default function EngineDetails() {
 
 
 
-            {/* Tab Bar */}
+            {/* Modern Tab Bar */}
             <div style={{
-                background: '#f1f5f9',
-                borderBottom: '1px solid #e2e8f0',
+                background: 'white',
+                borderBottom: '1px solid #edf2f7',
                 display: 'flex',
-                padding: '0.5rem 1.5rem 0',
-                gap: '1rem'
+                padding: '0.75rem 1.5rem',
+                gap: '0.5rem',
+                alignItems: 'center'
             }}>
                 {tabs.map(tab => (
                     <button
                         key={tab}
                         onClick={() => setActiveTab(tab)}
                         style={{
-                            padding: '0.75rem 1.25rem',
+                            padding: '0.6rem 1.25rem',
                             border: 'none',
-                            background: activeTab === tab ? 'white' : 'transparent',
+                            background: activeTab === tab ? 'var(--primary)' : 'transparent',
                             cursor: 'pointer',
-                            fontSize: '0.8rem',
-                            fontWeight: 800,
-                            color: activeTab === tab ? 'var(--primary)' : '#64748b',
-                            borderBottom: activeTab === tab ? '3px solid var(--primary)' : '3px solid transparent',
-                            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                            letterSpacing: '0.5px',
-                            borderRadius: '8px 8px 0 0',
-                            transform: activeTab === tab ? 'translateY(-2px)' : 'none',
-                            boxShadow: activeTab === tab ? '0 -4px 10px rgba(0,0,0,0.05)' : 'none',
-                            zIndex: activeTab === tab ? 1 : 0
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            color: activeTab === tab ? 'white' : '#718096',
+                            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                            letterSpacing: '0.05em',
+                            borderRadius: '100px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: activeTab === tab ? '0 4px 12px rgba(2,62,138,0.25)' : 'none',
+                            transform: activeTab === tab ? 'scale(1.02)' : 'scale(1)',
+                        }}
+                        onMouseEnter={(e) => {
+                            if (activeTab !== tab) {
+                                e.currentTarget.style.background = '#f7fafc';
+                                e.currentTarget.style.color = 'var(--primary)';
+                            }
+                        }}
+                        onMouseLeave={(e) => {
+                            if (activeTab !== tab) {
+                                e.currentTarget.style.background = 'transparent';
+                                e.currentTarget.style.color = '#718096';
+                            }
                         }}
                     >
                         {tab}
