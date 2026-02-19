@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Text
 from sqlalchemy.orm import relationship
 from database import Base
 import datetime
@@ -27,6 +27,7 @@ class Engine(Base):
 
     owner = relationship("User", back_populates="engines")
     files = relationship("FileMetadata", back_populates="engine")
+    segregation_results = relationship("SegregationResult", back_populates="engine", cascade="all, delete-orphan")
 
 class FileMetadata(Base):
     __tablename__ = "files"
@@ -40,3 +41,25 @@ class FileMetadata(Base):
     upload_date = Column(DateTime, default=datetime.datetime.utcnow)
 
     engine = relationship("Engine", back_populates="files")
+
+class SegregationResult(Base):
+    """Stores virtual (no-move) segregation result for each Box file."""
+    __tablename__ = "segregation_results"
+
+    id                   = Column(Integer, primary_key=True, index=True)
+    engine_id            = Column(Integer, ForeignKey("engines.id"))
+    box_file_id          = Column(String, index=True)   # Box file ID
+    box_file_name        = Column(String)
+    box_folder_id        = Column(String)               # immediate parent Box folder ID
+    original_folder_path = Column(String, default="")   # ancestor path, e.g. "RAW FOLDER/Engine Data Plate"
+    category             = Column(String, default="Unclassified")  # virtual segregation bucket
+    prediction           = Column(String, default="Manual Segregation")
+    confidence           = Column(Float,  default=0.0)
+    method               = Column(String, default="")   # 'Folder Match' / 'AI MODEL' / 'Direct Keyword' / 'Manual'
+    status               = Column(String, default="")   # 'PDF readable', 'OCR readable', etc.
+    raw_text             = Column(Text,   default="")
+    cleaned_text         = Column(Text,   default="")
+    reason               = Column(String, default="")
+    created_at           = Column(DateTime, default=datetime.datetime.utcnow)
+
+    engine = relationship("Engine", back_populates="segregation_results")

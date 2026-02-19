@@ -11,3 +11,15 @@ anyio
 boxsdk
 box-sdk-gen
 psycopg2-binary
+
+pandas
+ocrmypdf 
+joblib 
+nltk 
+pymupdf
+requests 
+pydantic 
+google-generativeai
+azure-ai-documentintelligence
+python-dotenv
+scikit-learn

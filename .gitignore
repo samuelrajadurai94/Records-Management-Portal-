@@ -10,3 +10,5 @@ node_modules/
 dist/
 .DS_Store
 backend/Gemrec_test1.ipynb
+folder segregation app/
+backend/Inference_Gemini_Fold_seg.ipynb
