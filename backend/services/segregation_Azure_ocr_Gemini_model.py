@@ -16,6 +16,7 @@ import tempfile
 import time
 from io import BytesIO
 from pathlib import Path
+import json
 
 import fitz          # PyMuPDF
 import joblib
@@ -38,16 +39,16 @@ from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 from azure.ai.documentintelligence.models import DocumentAnalysisFeature
 from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 
-import  _json
+import json
 import time
 import base64
 import tempfile
 from datetime import datetime, timezone
 from typing import List, Optional, Dict
 import requests
-#from pydantic import BaseModel, Field
-#from google import genai
-#from google.genai import types
+from pydantic import BaseModel, Field
+from google import genai
+from google.genai import types
 
 # ─────────────────────────────────────────────────────────────
 # CONFIG & RESOURCES
@@ -75,6 +76,278 @@ def azure_pdf_extraction_directbytes(pdf_bytes):
 
     result = poller.result()
     return result
+
+Gemini_client = genai.Client(
+    api_key=os.environ["GEMINI_API_KEY_PAID1"]
+)
+
+
+MAIN_PROMPT = """You are an expert aviation technical document classification system.
+
+Your sole task is to classify aviation related , aircraft engine and commercial documents into EXACTLY ONE
+predefined document class for Document content Given below and also Give a confident score for your prediction.
+There are 27 predefined classes.
+
+You must determine the document’s PRIMARY PURPOSE and INTENT.
+You have to Understand the Describtion of each class very well.
+The ONLY valid document classes and its describtion are:
+
+1. Certified Statement of Total Time in Service : 
+   Formal certification document confirming the total accumulated operating hours and total flight cycles of an aircraft, engine, APU, or major component as of a specified date.
+    Typically includes total time (TSN), total cycles (CSN), hours since new, cycles since new
+    The primary purpose is to declare cumulative operational time.
+    KEYWORDS: Time Status Statement, Engine operation report, Statement of cycles and hours, Combination Statement.  
+
+2. Non-Incident / Non-Accident Statement : 
+   Declarations confirming that no incidents or accidents occurred
+   during operation or ownership.
+   KEYWORDS: Incident/Accident Clearance Statement,Non Incident/Accident Statement,
+
+3. Non-Exceedance Statement:  
+   Statements declaring that operational, performance, or regulatory
+   limits were not exceeded.
+    KEYWORDS: ENGINE NON-EXCEEDANCE STATEMENT
+
+4. Power / Thrust Rating Statement : 
+   Documents confirming approved engine power or thrust ratings and thrust usage configuration.
+   KEYWORDS: Power rating statement,Thrust Rating Statement
+
+5. PMA / DER Statement : 
+   Documentation related to Parts Manufacturer Approval (PMA) or
+   Designated Engineering Representative (DER) approvals for parts.
+    KEYWORDS: No PMA Parts statement,No DER/DOA repairs
+   
+6. Oil / Fluid Used Statement :  
+   Statements detailing oil, fuel, or other fluid usage during
+   operation, testing, or maintenance.
+   KEYWORDS: The Fluid/OIL Used statement,NO CIS FUEL USAGE STATEMENT
+
+7. Field Repairs Statement : 
+   Declarations confirming field repairs performed or stating that
+   no field or temporary repairs exist.
+   KEYWORDS: ENGINE FIELD REPAIR STATEMENT,No field repairs statement
+
+8. Engine Condition / Trend Monitoring Report : 
+   Reports showing engine performance trends, margins, and health
+   monitoring parameters over time.
+   KEYWORDS: Long term trend plot,Short term trend plot
+
+9. Oil Consumption Report : 
+   Reports specifically focused on oil consumption rates and trends.
+   KEYWORDS: Oil consumption Statement,oil consumption trend / history
+   
+10. Last Test Cell / MPA Report : 
+    Documents summarizing engine ground run or test cell performance
+    after maintenance or overhaul.
+    KEYWORDS: Engine Ground run data,Summary of performance,Power assurance test
+
+11. ETOPS Compliance Report : 
+    Documentation confirming compliance with ETOPS operational and
+    regulatory requirements. ETOPS — Extended-range Twin-engine Operational Performance Standards
+    KEYWORDS: NON ETOPS STATEMENT
+
+12. Manufacturer Delivery Documents : 
+    Documents issued at delivery by the manufacturer, including export,
+    as-built, and certification records.
+    KEYWORDS: As-built engine data submittal,Export COA,manufactures's SB report ,manufactures's AD report 
+
+13. Logbook & Install-Removal History : 
+    Records showing installation, removal, and operational history
+    from aircraft or engine logbooks.
+    KEYWORDS: Aircraft log ,engine log, On off History,Engine Historical records
+
+14. Engine Last Release Certificate : 
+    Authorized release to service documents such as FAA 8130-3 or
+    EASA Form 1 confirming airworthiness approval.
+    KEYWORDS: ARC, Authorized release certificate
+
+15. Last Borescope Inspection : 
+    Reports documenting the most recent borescope inspection findings.
+    KEYWORDS: BSI Report,borescope inspection
+    
+16. Commercial Documents : 
+    Commercial agreements such as bills of sale, warranties, and
+    contractual documents.
+
+17. Preservation : 
+    Documents confirming preservation actions performed for storage
+    or transport of engines or components.
+    KEYWORDS: engine preservation tag
+
+18. LLP Summary : 
+    Reports summarizing life-limited parts status and remaining life hours and cycles.
+    KEYWORDS: engine LLP status,LLP Summary,Engine disk sheet report
+    
+19. AD (Airworthiness Directive) Status: 
+    Documents confirming compliance with applicable airworthiness
+    directives.
+    KEYWORDS: AD status,AD Compliance checklist.
+
+20. SB (Service Bulletin) : 
+    Documents confirming compliance with manufacturer service bulletins.
+    KEYWORDS : SB status, SB compliance checklist
+    
+21. In-House Modifications : 
+    Documentation of non-OEM or operator-approved modifications.
+    KEYWORDS: Non-OEM Modifications
+    
+22. Fan Blades : 
+    Records specifically listing fan blade identification, mapping,
+    or status.
+    KEYWORDS: Fan blade listing,Fan blade  Distribution,Fan blade  Status report,Fan blade Configuration
+
+23. HPT Blades : 
+    Records specifically listing high-pressure turbine blade
+    identification, mapping, or status.
+    KEYWORDS: HBT blade listing,HBT blade Distribution,HBT blade  Status report,HBT blade Configuration
+
+24. QEC / LRU Inventory : 
+    Inventory listings of quick engine change kits and line replaceable
+    units.
+    KEYWORDS: Engine LRU & Accessory Status List,QEC configuration,LRU configuration,Accessories status list
+
+25. LDND / MPD : 
+    Maintenance planning documents showing last done and next due tasks.
+    KEYWORDS: LAST DONE NEXT DUE, MPD status Report, TASK (LDND) REPORT 
+    
+26. Ferry Flight : 
+    Documentation related to aircraft or engine ferry flights.
+    KEYWORDS: Ferry Flight statement, aircraft ferry log, Ferry Record
+
+27. Carry Over / Forward List : 
+    Lists of carried-forward, open, or deferred items.
+    KEYWORDS : CARRY FORWARD SHEET REPORT
+
+Rules:
+- Choose EXACTLY ONE class.
+- Use document intent over isolated keywords.
+- Keywords are indicators, not rules.
+- If multiple classes appear relevant, select the class whose description best matches the document’s primary purpose.
+- Do NOT explain reasoning.
+- Output STRICT valid JSON only.
+            {{
+            "document_type": "<exact class name>",
+            "confidence": 0.0
+            }}
+            """
+
+def classify_document_Gemini(document_text: str) -> dict:
+    
+    if document_text == None:
+        return None, None
+    
+    prompt = f"""
+
+            {MAIN_PROMPT}
+
+            Document Content:
+            <<<
+            {document_text}
+            >>>
+
+            """
+
+    response = Gemini_client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+        config={
+            "temperature": 0,
+            "top_p": 0.9,
+            "response_mime_type": "application/json"
+        }
+    )
+    result = json.loads(response.text)
+    #result["document_type"],"Confidence": result["confidence"]
+
+    return result["document_type"], result["confidence"]
+
+Gemini_output_mapping_dict = {
+    'Certified Statement of Total Time in Service':
+        '1. Certified statement of total time in service (Hrs & Cycles)',
+
+    'Last Test Cell / MPA Report':
+        '10. Last Test Cell-MPA Report',
+
+    'ETOPS Compliance Report':
+        '11. ETOPs compliance report',
+
+    'SB (Service Bulletin)':
+        '22. SB',
+
+    'Manufacturer Delivery Documents':
+        '12. Manufacturer delivery docs',
+
+    'Logbook & Install-Removal History':
+        '13. Logbook & Install-Removal History',
+
+    'Engine Last Release Certificate':
+        '15. Engine Last Release Certificate',
+
+    'Last Borescope Inspection':
+        '16. Last Borescope Inspection',
+
+    'Commercial Documents':
+        '17. Commercial',
+
+    'Preservation':
+        '18. Preservation',
+
+    'LLP Summary':
+        '19. LLP Summary',
+
+    'Non-Incident / Non-Accident Statement':
+        '2. Non-Incident-Accident Statement',
+
+    'AD (Airworthiness Directive) Status':
+        '21. AD',
+
+    'In-House Modifications':
+        '23. In-House Modifications (If applicable)',
+
+    'Field Repairs Statement':
+        '7. Field repairs Statement',
+
+    'Fan Blades':
+        '24. Fan Blades',
+
+    'HPT Blades':
+        '25. HPT Blades',
+
+    'QEC / LRU Inventory':
+        '26. QEC-LRU Inventory',
+
+    'LDND / MPD':
+        '27. LDND-MPD',
+
+    'Non-Exceedance Statement':
+        '3. Non-exceedance Statement',
+
+    'Power / Thrust Rating Statement':
+        '4. Power-Thrust rating Statement',
+
+    'PMA / DER Statement':
+        '5. PMA-DER Statement',
+
+    'Oil / Fluid Used Statement':
+        '6. Oil-Fluid used Statement',
+
+    'Engine Condition / Trend Monitoring Report':
+        '8. Engine Condition-Trend Monitoring Report',
+
+    'Oil Consumption Report':
+        '9. Oil Consumption Reports',
+    
+    'Thrust Change Supporting Documents':
+        '4. Power-Thrust rating Statement'
+
+}
+
+def Gemini_output_mapping_func(x):
+    if x in Gemini_output_mapping_dict:
+        return Gemini_output_mapping_dict[x]
+    else:
+        return x
+
 
 # # ── OCR Tool Paths ─────────────────────────────────────────────────────────
 # # ocrmypdf calls Tesseract and Ghostscript directly as subprocesses —
@@ -363,7 +636,8 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
                             result["method"]     = "Direct Keyword"
                             result["category"]   = label
                     if not label:
-                        pred, conf = _predict_with_model(clean)
+                        pred, conf = classify_document_Gemini(clean)
+                        pred = Gemini_output_mapping_func(pred)
                         result["prediction"] = pred
                         result["confidence"] = conf
                         result["method"]     = "AI MODEL"
@@ -396,7 +670,8 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
                         result["method"]     = "Direct Keyword"
                         result["category"]   = label
                 if not label:
-                    pred, conf = _predict_with_model(clean)
+                    pred, conf = classify_document_Gemini(clean)
+                    pred = Gemini_output_mapping_func(pred)
                     result["prediction"] = pred
                     result["confidence"] = conf
                     result["method"]     = "AI MODEL"
