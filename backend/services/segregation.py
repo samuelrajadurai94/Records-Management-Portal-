@@ -3,9 +3,9 @@ services/segregation.py
 -----------------------
 Virtual (no-file-move) Auto Folder Segregation for Box files.
 
-Mirrors the logic from the desktop App_with_new_OCRPDF.py:
-  Phase 1 – Folder-name keyword matching (fast, no PDF reading)
-  Phase 2 – PDF content classification via OCR + AI model (for unmatched PDFs)
+
+Phase 1 – Folder-name keyword matching (fast, no PDF reading)
+Phase 2 – PDF content classification via OCR + AI model (for unmatched PDFs)
 
 All results are saved to the segregation_results DB table.
 """
@@ -277,6 +277,7 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
         "reason": "",
         "category": "Manual Segregation",
     }
+    label = None
 
     try:
         pdf_doc = fitz.open(stream=BytesIO(pdf_bytes), filetype="pdf")
@@ -319,19 +320,19 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
                 clean = _remove_symbols(ocr_text)
                 readable, score, valid = _check_readability(clean)
 
-                result["raw_text"]     = ocr_text[:5000]
-                result["cleaned_text"] = clean[:5000]
+                result["raw_text"]     = ocr_text
+                result["cleaned_text"] = clean
 
                 if readable and len(valid) > 10:
                     result["status"] = "OCR readable"
                     result["reason"] = f"OCR ratio: {score:.2f}"
                     if num_pages < 3:
-                        label = _label_from_keyword_csv(ocr_page_texts)
+                        label = _label_from_keyword_csv(ocr_page_texts[0])
                         if label is not None:
                             result["prediction"] = label
                             result["method"]     = "Direct Keyword"
                             result["category"]   = label
-                    else:
+                    if not label:
                         pred, conf = _predict_with_model(clean)
                         result["prediction"] = pred
                         result["confidence"] = conf
@@ -350,8 +351,8 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
                     except Exception:
                         pass
         else:
-            result["raw_text"]     = all_text[:5000]
-            result["cleaned_text"] = clean[:5000]
+            result["raw_text"]     = all_text
+            result["cleaned_text"] = clean
             readable, score, valid = _check_readability(clean)
             final_valid = [w for w in valid if w.lower() not in STOPLIST]
 
@@ -359,12 +360,12 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
                 result["status"] = "PDF readable"
                 result["reason"] = f"PDF ratio: {score:.2f}"
                 if num_pages < 3:
-                    label = _label_from_keyword_csv(page_texts)
+                    label = _label_from_keyword_csv(page_texts[0])
                     if label is not None:
                         result["prediction"] = label
                         result["method"]     = "Direct Keyword"
                         result["category"]   = label
-                else:
+                if not label:
                     pred, conf = _predict_with_model(clean)
                     result["prediction"] = pred
                     result["confidence"] = conf

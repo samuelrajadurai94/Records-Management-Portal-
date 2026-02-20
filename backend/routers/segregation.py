@@ -9,7 +9,20 @@ from sqlalchemy.orm import Session
 from collections import defaultdict
 
 import database, models, dependencies
-from services import segregation as seg_service
+
+from services import segregation as seg_service 
+
+
+# from dotenv import load_dotenv
+# load_dotenv()
+# Extraction_Pipeline  = os.getenv("Extraction_Pipeline")
+# print(Extraction_Pipeline)    #"Azure_ocr_rf_model"
+# if Extraction_Pipeline =="Azure_ocr_rf_model":
+#     from services import segregation_Azure_ocr_rf_model as seg_service
+# elif Extraction_Pipeline == "ocmp_ocr_rf_model":
+#     from services import segregation as seg_service
+# elif Extraction_Pipeline =="Azure_ocr_Gemini_model":
+#     pass
 
 router = APIRouter(
     prefix="/segregation",
