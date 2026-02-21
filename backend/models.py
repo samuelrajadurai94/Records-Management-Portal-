@@ -61,5 +61,6 @@ class SegregationResult(Base):
     cleaned_text         = Column(Text,   default="")
     reason               = Column(String, default="")
     created_at           = Column(DateTime, default=datetime.datetime.utcnow)
+    latest               = Column(Boolean, default=False)
 
     engine = relationship("Engine", back_populates="segregation_results")

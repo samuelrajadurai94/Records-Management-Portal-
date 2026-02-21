@@ -41,6 +41,7 @@ VECTORIZER_PATH  = BACKEND_DIR / "Model" / os.getenv("VECTORIZER_NAME")
 KEYWORDS_CSV     = BACKEND_DIR / "Source" / "Keywords_30_7_25.csv"
 READABILITY_THRESHOLD = float(os.getenv("READABILITY_THRESHOLD", "0.4"))
 AI_MODEL_CONF    = float(os.getenv("AI_MODEL_CONF", "0.0"))
+csn_value = os.getenv("csn_value",0)
 
 # ── OCR Tool Paths ─────────────────────────────────────────────────────────
 # ocrmypdf calls Tesseract and Ghostscript directly as subprocesses —
@@ -259,6 +260,15 @@ def _folder_keyword_match(folder_path: str, file_ext: str) -> str | None:
                     return category
     return None
 
+#"{:,}".format(25766)
+def check_latest(text_list,csn_value):    
+    if any(any(number in page for number in [csn_value,"{:,}".format(int(csn_value)),
+                                             "{:,}".format(int(csn_value)).replace(",", "."),
+                                             "{:,}".format(int(csn_value)).replace(",", "'")])for page in text_list):
+        Latest =True
+    else: Latest =False
+    return Latest
+
 # ─────────────────────────────────────────────────────────────
 # PHASE 2 — PDF CONTENT CLASSIFICATION
 # ─────────────────────────────────────────────────────────────
@@ -460,6 +470,7 @@ def perform_auto_segregation(engine_id: int, db: Session):
                 "prediction":           "Manual Segregation",
                 "confidence":           0.0,
                 "category":             "Manual Segregation",
+                "latest":               False
             }
 
             # Phase 1: folder keyword match
@@ -479,16 +490,21 @@ def perform_auto_segregation(engine_id: int, db: Session):
                         file_info["box_file_id"]
                     ).read()
                     ai_result = _classify_pdf_bytes(pdf_bytes, file_info["box_file_name"])
+                    Latest = check_latest([ai_result["raw_text"]],csn_value)
+                    if Latest:result_data["latest"] = True
+                    else : result_data["latest"] = False
                     result_data.update(ai_result)
                 except Exception as e:
                     result_data["status"] = "Download error"
                     result_data["reason"] = str(e)
                     result_data["category"] = "Manual Segregation"
+                    result_data["latest"] = False
             else:
                 # Non-PDF, non-media, not folder matched
-                result_data["category"] = "Other File Types"
+                result_data["category"] = "Manual Segregation"
                 result_data["method"]   = "Extension"
                 result_data["status"]   = "Non-PDF non-media"
+                result_data["latest"]   = False
 
             db_row = models.SegregationResult(**result_data)
             db.add(db_row)

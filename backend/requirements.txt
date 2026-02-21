@@ -19,7 +19,7 @@ nltk
 pymupdf
 requests 
 pydantic 
-google-generativeai
+google-genai
 azure-ai-documentintelligence
 python-dotenv
 scikit-learn
