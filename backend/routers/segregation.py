@@ -169,6 +169,7 @@ def get_segregation_results(
             "method":               r.method,
             "status":               r.status,
             "reason":               r.reason,
+            "latest":               bool(r.latest),
         })
 
     # Sort categories by name for consistent display
