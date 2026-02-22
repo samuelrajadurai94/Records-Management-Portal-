@@ -86,7 +86,18 @@ def get_segregation_status(
     if not engine:
         raise HTTPException(status_code=404, detail="Engine not found")
 
+    # Check in-memory status first (catches actively running jobs)
     status = seg_service.get_job_status(engine_id)
+    # If in-memory says "idle" but DB already has results, treat as "done"
+    # (happens after server restart or logout/login — memory is wiped but DB persists)
+    if status == "idle":
+        has_results = (
+            db.query(models.SegregationResult.id)
+            .filter(models.SegregationResult.engine_id == engine_id)
+            .first()
+        )
+        if has_results:
+            status = "done"
     return {"engine_id": engine_id, "status": status}
 
 
@@ -122,12 +133,17 @@ def get_segregation_results(
         .all()
     )
 
+    # Determine status: prefer in-memory (catches active/error), but if memory
+    # says "idle" and DB rows exist, it means a previous run completed before this
+    # server start (after restart / logout-login). Treat it as "done".
+    mem_status = seg_service.get_job_status(engine_id)
     if not rows:
         return {
-            "status": seg_service.get_job_status(engine_id),
+            "status": mem_status,
             "summary": {"total_files": 0, "pdf_files": 0, "media_files": 0, "other_files": 0, "categories_found": 0},
             "segregated": {},
         }
+    resolved_status = mem_status if mem_status in ("running", "error") else "done"
 
     MEDIA_EXT = {".mp4", ".png", ".jpeg", ".jpg", ".tif", ".heic", ".bmp"}
     pdf_count = media_count = other_count = 0
@@ -159,7 +175,7 @@ def get_segregation_results(
     sorted_seg = dict(sorted(segregated.items()))
 
     return {
-        "status": seg_service.get_job_status(engine_id),
+        "status": resolved_status,
         "summary": {
             "total_files":      len(rows),
             "pdf_files":        pdf_count,
