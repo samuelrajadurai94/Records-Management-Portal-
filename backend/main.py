@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
 from database import engine, Base
 import models
-from routers import auth, engines, files, segregation
+from routers import auth, engines,segregation #files
 
 # Create tables
 models.Base.metadata.create_all(bind=engine)
@@ -26,7 +26,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(engines.router)
-app.include_router(files.router)
+#app.include_router(files.router)
 app.include_router(segregation.router)
 
 @app.get("/")

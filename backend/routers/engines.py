@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Form, File, UploadFile, B
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import database, models, schemas, dependencies
-from services.storage import storage_service
+#from services.storage import storage_service
 from services.box_service import box_service
 import os
 import shutil
@@ -121,7 +121,7 @@ async def create_engine(
     db.refresh(db_engine)
     
     # Initialize Local Storage
-    storage_service.ensure_directories(db_engine.id)
+    #storage_service.ensure_directories(db_engine.id)
 
     # Start Background Upload to Box
     if upload_path:
