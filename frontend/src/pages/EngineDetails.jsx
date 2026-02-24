@@ -300,6 +300,201 @@ export default function EngineDetails() {
         return null;
     };
 
+    // ── Helpers: build a nested folder tree from flat file list ──────────
+    const TREE_METHODS = new Set(['Folder Match', 'Extension', 'Unclassified', 'Manual']);
+
+    function buildFolderTree(files) {
+        const root = { name: '', children: {}, files: [] };
+        for (const file of files) {
+            const pathStr = file.original_folder_path || '';
+            if (!pathStr) {
+                root.files.push(file);
+                continue;
+            }
+            const parts = pathStr.split('/').filter(Boolean);
+            let node = root;
+            for (const part of parts) {
+                if (!node.children[part]) {
+                    node.children[part] = { name: part, children: {}, files: [] };
+                }
+                node = node.children[part];
+            }
+            node.files.push(file);
+        }
+        return root;
+    }
+
+    function countTreeFiles(node) {
+        let count = node.files.length;
+        for (const child of Object.values(node.children)) {
+            count += countTreeFiles(child);
+        }
+        return count;
+    }
+
+    // ── Recursive folder-node renderer ────────────────────────────────────
+    const SegFolderNode = ({ node, level = 1, pathKey = '' }) => {
+        const nodeKey = pathKey ? `${pathKey}/${node.name}` : node.name;
+        const isOpen = !!expandedCategories[`_folder_${nodeKey}`];
+        const childEntries = Object.values(node.children);
+        const hasContent = childEntries.length > 0 || node.files.length > 0;
+        if (!hasContent) return null;
+        const fileCount = countTreeFiles(node);
+
+        return (
+            <div>
+                {/* Folder row */}
+                <div
+                    onClick={() => setExpandedCategories(prev => ({
+                        ...prev, [`_folder_${nodeKey}`]: !prev[`_folder_${nodeKey}`]
+                    }))}
+                    style={{
+                        display: 'flex', alignItems: 'center',
+                        padding: '6px 8px', paddingLeft: `${10 + level * 18}px`,
+                        cursor: 'pointer', background: 'transparent',
+                        color: 'var(--primary)', borderRadius: '5px',
+                        marginBottom: '1px', fontWeight: 500,
+                        fontSize: '0.8rem', transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.6)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                    <span style={{ marginRight: '4px', display: 'flex', alignItems: 'center' }}>
+                        {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    </span>
+                    {isOpen
+                        ? <FolderOpen size={14} style={{ marginRight: '6px', color: '#f59e0b' }} />
+                        : <Folder size={14} style={{ marginRight: '6px', color: '#f59e0b' }} />}
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {node.name}
+                    </span>
+                    <span style={{
+                        background: '#e8eaf6', color: '#3949ab',
+                        borderRadius: '10px', padding: '0px 6px',
+                        fontSize: '0.65rem', fontWeight: 700, marginLeft: '4px'
+                    }}>{fileCount}</span>
+                </div>
+
+                {/* Expanded children */}
+                {isOpen && (
+                    <>
+                        {/* Sub-folders first */}
+                        {childEntries
+                            .sort((a, b) => a.name.localeCompare(b.name))
+                            .map(child => (
+                                <SegFolderNode key={child.name} node={child} level={level + 1} pathKey={nodeKey} />
+                            ))
+                        }
+                        {/* Files at this level */}
+                        {node.files.map(file => {
+                            const mStyle = METHOD_COLORS[file.method] || METHOD_COLORS['Unclassified'];
+                            const isSelected = segSelectedFile?.box_file_id === file.box_file_id;
+                            return (
+                                <div
+                                    key={file.box_file_id}
+                                    onClick={() => handleSegFileClick(file)}
+                                    style={{
+                                        display: 'flex', flexDirection: 'column',
+                                        paddingLeft: `${10 + (level + 1) * 18}px`, paddingRight: '8px',
+                                        paddingTop: '4px', paddingBottom: '4px',
+                                        cursor: 'pointer', borderRadius: '4px',
+                                        background: isSelected ? 'var(--primary)' : 'transparent',
+                                        color: isSelected ? 'white' : 'inherit',
+                                        marginBottom: '1px', transition: 'background 0.15s',
+                                    }}
+                                    onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.7)'; }}
+                                    onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+                                >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <FileText size={12} style={{ flexShrink: 0, opacity: 0.7 }} />
+                                        <span style={{
+                                            fontSize: '0.76rem', fontWeight: 500,
+                                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                            flex: 1
+                                        }}>{file.box_file_name}</span>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingLeft: '18px', marginTop: '2px', flexWrap: 'wrap' }}>
+                                        <span style={{
+                                            fontSize: '0.63rem', padding: '1px 5px', borderRadius: '8px',
+                                            background: isSelected ? 'rgba(255,255,255,0.25)' : mStyle.bg,
+                                            color: isSelected ? 'white' : mStyle.color, fontWeight: 600
+                                        }}>{file.method}</span>
+                                        {file.confidence > 0 && (
+                                            <span style={{ fontSize: '0.63rem', opacity: 0.7 }}>
+                                                {(file.confidence * 100).toFixed(0)}%
+                                            </span>
+                                        )}
+                                        {file.original_folder_path && (
+                                            <span style={{
+                                                fontSize: '0.6rem', opacity: 0.55,
+                                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                                maxWidth: '140px'
+                                            }} title={file.original_folder_path}>
+                                                📂 {file.original_folder_path}
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </>
+                )}
+            </div>
+        );
+    };
+
+    // ── Flat file-item renderer (for Direct Keyword / AI MODEL) ───────────
+    const SegFlatFileItem = ({ file }) => {
+        const mStyle = METHOD_COLORS[file.method] || METHOD_COLORS['Unclassified'];
+        const isSelected = segSelectedFile?.box_file_id === file.box_file_id;
+        return (
+            <div
+                onClick={() => handleSegFileClick(file)}
+                style={{
+                    display: 'flex', flexDirection: 'column',
+                    paddingLeft: '28px', paddingRight: '8px',
+                    paddingTop: '5px', paddingBottom: '5px',
+                    cursor: 'pointer', borderRadius: '4px',
+                    background: isSelected ? 'var(--primary)' : 'transparent',
+                    color: isSelected ? 'white' : 'inherit',
+                    marginBottom: '1px', transition: 'background 0.15s',
+                }}
+                onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.7)'; }}
+                onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <FileText size={12} style={{ flexShrink: 0, opacity: 0.7 }} />
+                    <span style={{
+                        fontSize: '0.78rem', fontWeight: 500,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        flex: 1
+                    }}>{file.box_file_name}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingLeft: '18px', marginTop: '2px' }}>
+                    <span style={{
+                        fontSize: '0.65rem', padding: '1px 5px', borderRadius: '8px',
+                        background: isSelected ? 'rgba(255,255,255,0.25)' : mStyle.bg,
+                        color: isSelected ? 'white' : mStyle.color, fontWeight: 600
+                    }}>{file.method}</span>
+                    {file.confidence > 0 && (
+                        <span style={{ fontSize: '0.65rem', opacity: 0.7 }}>
+                            {(file.confidence * 100).toFixed(0)}%
+                        </span>
+                    )}
+                    {file.original_folder_path && (
+                        <span style={{
+                            fontSize: '0.62rem', opacity: 0.6,
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            maxWidth: '120px'
+                        }} title={file.original_folder_path}>
+                            📂 {file.original_folder_path.split('/').pop()}
+                        </span>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     const SegCategoryTree = () => {
         if (!segData || !segData.segregated) return null;
         const { segregated, summary } = segData;
@@ -328,6 +523,12 @@ export default function EngineDetails() {
 
                     {Object.entries(segregated).map(([category, files]) => {
                         const isOpen = !!expandedCategories[category];
+
+                        // Separate files: tree-methods vs flat-methods (exclude latest — shown in ⭐ Latest folder only)
+                        const treeFiles = files.filter(f => TREE_METHODS.has(f.method) && !f.latest);
+                        const flatFiles = files.filter(f => !TREE_METHODS.has(f.method) && !f.latest);
+                        const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles) : null;
+
                         return (
                             <div key={category}>
                                 {/* Category folder row */}
@@ -362,58 +563,72 @@ export default function EngineDetails() {
                                     }}>{files.length}</span>
                                 </div>
 
-                                {/* Files under category */}
-                                {isOpen && files.map(file => {
-                                    const mStyle = METHOD_COLORS[file.method] || METHOD_COLORS['Unclassified'];
-                                    const isSelected = segSelectedFile?.box_file_id === file.box_file_id;
+                                {/* Expanded content */}
+                                {isOpen && (() => {
+                                    const latestFiles = files.filter(f => f.latest);
+                                    const latestKey = `_latest_${category}`;
+                                    const isLatestOpen = !!expandedCategories[latestKey];
                                     return (
-                                        <div
-                                            key={file.box_file_id}
-                                            onClick={() => handleSegFileClick(file)}
-                                            style={{
-                                                display: 'flex', flexDirection: 'column',
-                                                paddingLeft: '28px', paddingRight: '8px',
-                                                paddingTop: '5px', paddingBottom: '5px',
-                                                cursor: 'pointer', borderRadius: '4px',
-                                                background: isSelected ? 'var(--primary)' : 'transparent',
-                                                color: isSelected ? 'white' : 'inherit',
-                                                marginBottom: '1px', transition: 'background 0.15s',
-                                            }}
-                                            onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.7)'; }}
-                                            onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
-                                        >
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                <FileText size={12} style={{ flexShrink: 0, opacity: 0.7 }} />
-                                                <span style={{
-                                                    fontSize: '0.78rem', fontWeight: 500,
-                                                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                                    flex: 1
-                                                }}>{file.box_file_name}</span>
-                                            </div>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingLeft: '18px', marginTop: '2px' }}>
-                                                <span style={{
-                                                    fontSize: '0.65rem', padding: '1px 5px', borderRadius: '8px',
-                                                    background: isSelected ? 'rgba(255,255,255,0.25)' : mStyle.bg,
-                                                    color: isSelected ? 'white' : mStyle.color, fontWeight: 600
-                                                }}>{file.method}</span>
-                                                {file.confidence > 0 && (
-                                                    <span style={{ fontSize: '0.65rem', opacity: 0.7 }}>
-                                                        {(file.confidence * 100).toFixed(0)}%
-                                                    </span>
-                                                )}
-                                                {file.original_folder_path && (
-                                                    <span style={{
-                                                        fontSize: '0.62rem', opacity: 0.6,
-                                                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                                        maxWidth: '120px'
-                                                    }} title={file.original_folder_path}>
-                                                        📂 {file.original_folder_path.split('/').pop()}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </div>
+                                        <>
+                                            {/* ⭐ Latest folder — shown only if any latest files exist */}
+                                            {latestFiles.length > 0 && (
+                                                <div>
+                                                    <div
+                                                        onClick={() => setExpandedCategories(prev => ({
+                                                            ...prev, [latestKey]: !prev[latestKey]
+                                                        }))}
+                                                        style={{
+                                                            display: 'flex', alignItems: 'center',
+                                                            padding: '6px 8px', paddingLeft: '28px',
+                                                            cursor: 'pointer', background: 'transparent',
+                                                            color: '#2e7d32', borderRadius: '5px',
+                                                            marginBottom: '1px', fontWeight: 600,
+                                                            fontSize: '0.8rem', transition: 'background 0.15s',
+                                                        }}
+                                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(232,245,233,0.7)'; }}
+                                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                                    >
+                                                        <span style={{ marginRight: '4px', display: 'flex', alignItems: 'center' }}>
+                                                            {isLatestOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                                        </span>
+                                                        {isLatestOpen
+                                                            ? <FolderOpen size={14} style={{ marginRight: '6px', color: '#2e7d32' }} />
+                                                            : <Folder size={14} style={{ marginRight: '6px', color: '#2e7d32' }} />}
+                                                        <span style={{ flex: 1 }}>⭐ Latest</span>
+                                                        <span style={{
+                                                            background: '#e8f5e9', color: '#2e7d32',
+                                                            borderRadius: '10px', padding: '0px 6px',
+                                                            fontSize: '0.65rem', fontWeight: 700, marginLeft: '4px'
+                                                        }}>{latestFiles.length}</span>
+                                                    </div>
+                                                    {isLatestOpen && latestFiles.map(file => (
+                                                        <SegFlatFileItem key={`latest_${file.box_file_id}`} file={file} />
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {/* Tree-rendered files (Folder Match / Manual / Extension / Unclassified) */}
+                                            {folderTree && (
+                                                <>
+                                                    {/* Files at root level (no folder path) */}
+                                                    {folderTree.files.map(file => (
+                                                        <SegFlatFileItem key={file.box_file_id} file={file} />
+                                                    ))}
+                                                    {/* Nested folder nodes */}
+                                                    {Object.values(folderTree.children)
+                                                        .sort((a, b) => a.name.localeCompare(b.name))
+                                                        .map(child => (
+                                                            <SegFolderNode key={child.name} node={child} level={1} pathKey={category} />
+                                                        ))
+                                                    }
+                                                </>
+                                            )}
+                                            {/* Flat-rendered files (Direct Keyword / AI MODEL) */}
+                                            {flatFiles.map(file => (
+                                                <SegFlatFileItem key={file.box_file_id} file={file} />
+                                            ))}
+                                        </>
                                     );
-                                })}
+                                })()}
                             </div>
                         );
                     })}

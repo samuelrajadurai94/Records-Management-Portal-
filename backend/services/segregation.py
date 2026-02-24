@@ -255,8 +255,8 @@ def _folder_keyword_match(folder_path: str, file_ext: str) -> str | None:
                     if category == "Archive":
                         parts = folder_path.split("/")
                         parent_name = parts[-2] if len(parts) >= 2 else ""
-                        label = _category_from_text(parent_name)
-                        return label if label else "Archive"
+                        label = _category_from_text(parent_name) 
+                        return label if label else "Manual Segregation"
                     return category
     return None
 
