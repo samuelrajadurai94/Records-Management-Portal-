@@ -78,6 +78,8 @@ export default function EngineDetails() {
     const [metaFiles, setMetaFiles] = useState([]);
     const [metaSelectedFile, setMetaSelectedFile] = useState(null);
     const [metaExpandedCategories, setMetaExpandedCategories] = useState({});
+    // Per-file processing: { [file_id]: { status: 'idle'|'processing'|'error', message: '' } }
+    const [fileProcessing, setFileProcessing] = useState({});
 
     const tabs = ['RAW FOLDER', 'FOLDER SEGREGATION', 'META DATA TAGGING', 'OPEN ITEM LIST', 'LLP TRACE', 'MINIPACK'];
 
@@ -1092,6 +1094,32 @@ export default function EngineDetails() {
     };
 
     // ── META DATA TAGGING: metadata viewer panel ──────────────────────────
+    // ── processFile: on-demand single-file extraction + tagging ─────────
+    const processFile = useCallback(async (file) => {
+        const fid = file.id;
+        setFileProcessing(prev => ({ ...prev, [fid]: { status: 'processing', message: '' } }));
+        try {
+            const res = await api.post(`/metadata/process-file/${id}/${fid}`);
+            const data = res.data;
+            // Update metaFiles so sidebar badge refreshes
+            setMetaFiles(prev => prev.map(f =>
+                f.id === fid
+                    ? { ...f, metadata_json: data.metadata_json, has_text: data.has_text, has_schema: data.has_schema }
+                    : f
+            ));
+            // Update the selected file panel too
+            setMetaSelectedFile(prev => prev?.id === fid
+                ? { ...prev, metadata_json: data.metadata_json, has_text: data.has_text, has_schema: data.has_schema }
+                : prev
+            );
+            setFileProcessing(prev => ({ ...prev, [fid]: { status: 'idle', message: '' } }));
+        } catch (err) {
+            const msg = err?.response?.data?.detail || 'Processing failed.';
+            setFileProcessing(prev => ({ ...prev, [fid]: { status: 'error', message: msg } }));
+        }
+    }, [id]);
+
+    // ── MetadataViewer: smart per-file viewer ─────────────────────────────
     const MetadataViewer = ({ file }) => {
         if (!file) {
             return (
@@ -1099,175 +1127,264 @@ export default function EngineDetails() {
                     <FileText size={60} style={{ marginBottom: '1rem', opacity: 0.3, color: '#6366f1' }} />
                     <h3 style={{ marginBottom: '0.5rem', color: '#444' }}>Select a File</h3>
                     <p style={{ fontSize: '0.9rem', color: '#666', maxWidth: '340px', lineHeight: 1.6 }}>
-                        Click any file in the sidebar to view its tagged metadata here.
+                        Click any file in the sidebar to view its tagged metadata.
                     </p>
                 </div>
             );
         }
 
+        const isPDF = file.box_file_name?.toLowerCase().endsWith('.pdf');
         const mj = file.metadata_json;
         const hasData = mj && Object.keys(mj).length > 0;
+        const hasText = !!file.has_text;
+        const hasSchema = !!file.has_schema;
+        const procState = fileProcessing[file.id] || { status: 'idle', message: '' };
+        const isProcessing = procState.status === 'processing';
 
-        if (!hasData) {
+        // Shared header card shown on every state
+        const FileHeader = () => (
+            <div style={{
+                display: 'flex', alignItems: 'flex-start', gap: '12px',
+                marginBottom: '1.5rem', padding: '16px',
+                background: 'white', borderRadius: '12px',
+                boxShadow: '0 1px 6px rgba(0,0,0,0.07)', border: '1px solid #e2e8f0'
+            }}>
+                <FileText size={38} color="#6366f1" style={{ flexShrink: 0, marginTop: '2px' }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: '1rem', color: '#1a202c', marginBottom: '6px', wordBreak: 'break-word' }}>
+                        {file.box_file_name}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        <span style={{ fontSize: '0.72rem', background: '#ede9fe', color: '#7c3aed', borderRadius: '20px', padding: '2px 10px', fontWeight: 600 }}>{file.category}</span>
+                        <span style={{ fontSize: '0.72rem', background: '#e0f2fe', color: '#0369a1', borderRadius: '20px', padding: '2px 10px', fontWeight: 600 }}>{file.method}</span>
+                        {hasText && <span style={{ fontSize: '0.7rem', background: '#d1fae5', color: '#065f46', borderRadius: '20px', padding: '2px 10px', fontWeight: 600 }}>✅ Text Extracted</span>}
+                        {hasData && <span style={{ fontSize: '0.7rem', background: '#fef3c7', color: '#78350f', borderRadius: '20px', padding: '2px 10px', fontWeight: 600 }}>🏷️ Tagged</span>}
+                    </div>
+                </div>
+            </div>
+        );
+
+        // ── State: non-PDF ────────────────────────────────────────────────
+        if (!isPDF) {
             return (
-                <div style={{ textAlign: 'center', padding: '3rem', opacity: 0.65 }}>
-                    <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>🏷️</div>
-                    <h3 style={{ marginBottom: '0.5rem', color: '#555' }}>{file.box_file_name}</h3>
-                    <p style={{ fontSize: '0.9rem', color: '#888' }}>
-                        No metadata tagged for this file yet.<br />
-                        Run <strong>Start Metadata Tagging</strong> to process it.
-                    </p>
+                <div>
+                    <FileHeader />
+                    <div style={{ textAlign: 'center', padding: '2rem', opacity: 0.6 }}>
+                        <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>ℹ️</div>
+                        <h3 style={{ color: '#555', marginBottom: '0.5rem' }}>Non-PDF File</h3>
+                        <p style={{ fontSize: '0.9rem', color: '#888' }}>
+                            Metadata tagging is only supported for PDF files.
+                        </p>
+                    </div>
                 </div>
             );
         }
 
-        // Partition keys into scalar (General Fields) vs array/object (Component tables)
-        const generalEntries = [];
-        const componentSections = [];
-        for (const [key, val] of Object.entries(mj)) {
-            if (Array.isArray(val)) {
-                componentSections.push({ key, items: val });
-            } else if (val !== null && typeof val === 'object') {
-                componentSections.push({ key, items: [val] });
-            } else {
-                generalEntries.push([key, val]);
-            }
-        }
-
-        const fmtKey = (k) => k.replace(/_/g, ' ');
-        const formatVal = (v) => {
-            if (v === null || v === undefined) return '—';
-            if (typeof v === 'boolean') return v ? 'Yes' : 'No';
-            if (typeof v === 'object') return JSON.stringify(v);
-            return String(v);
-        };
-
-        const labelStyle = {
-            fontSize: '0.78rem', color: '#64748b', fontWeight: 600,
-            padding: '9px 14px', borderBottom: '1px solid #f1f5f9',
-            whiteSpace: 'nowrap', width: '35%', textTransform: 'capitalize',
-            background: '#f8fafc',
-        };
-        const valStyle = {
-            fontSize: '0.82rem', color: '#1e293b',
-            padding: '9px 14px', borderBottom: '1px solid #f1f5f9',
-            wordBreak: 'break-word',
-        };
-        const thStyle = {
-            fontSize: '0.72rem', color: '#3b4a6b', fontWeight: 700,
-            textTransform: 'capitalize', padding: '9px 12px',
-            background: '#eef2ff', borderBottom: '2px solid #c7d2fe',
-            whiteSpace: 'nowrap', textAlign: 'left',
-        };
-        const tdStyle = {
-            fontSize: '0.78rem', color: '#1e293b',
-            padding: '8px 12px', borderBottom: '1px solid #f1f5f9',
-            wordBreak: 'break-word', verticalAlign: 'top',
-        };
-
-        return (
-            <div>
-                {/* File Header Card */}
-                <div style={{
-                    display: 'flex', alignItems: 'flex-start', gap: '12px',
-                    marginBottom: '1.5rem', padding: '16px',
-                    background: 'white', borderRadius: '12px',
-                    boxShadow: '0 1px 6px rgba(0,0,0,0.07)', border: '1px solid #e2e8f0'
-                }}>
-                    <FileText size={38} color="#6366f1" style={{ flexShrink: 0, marginTop: '2px' }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: '1rem', color: '#1a202c', marginBottom: '6px', wordBreak: 'break-word' }}>
-                            {file.box_file_name}
-                        </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                            <span style={{ fontSize: '0.72rem', background: '#ede9fe', color: '#7c3aed', borderRadius: '20px', padding: '2px 10px', fontWeight: 600 }}>
-                                {file.category}
-                            </span>
-                            <span style={{ fontSize: '0.72rem', background: '#e0f2fe', color: '#0369a1', borderRadius: '20px', padding: '2px 10px', fontWeight: 600 }}>
-                                {file.method}
-                            </span>
-                            {file.original_folder_path && (
-                                <span style={{ fontSize: '0.7rem', background: '#f1f5f9', color: '#64748b', borderRadius: '20px', padding: '2px 10px', fontWeight: 500 }}>
-                                    📂 {file.original_folder_path.split('/').slice(-1)[0]}
-                                </span>
-                            )}
-                        </div>
+        // ── State: no Pydantic schema for this category ───────────────────
+        if (!hasSchema) {
+            return (
+                <div>
+                    <FileHeader />
+                    <div style={{ textAlign: 'center', padding: '2rem', opacity: 0.65 }}>
+                        <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>⚠️</div>
+                        <h3 style={{ color: '#92400e', marginBottom: '0.5rem' }}>No Schema Available</h3>
+                        <p style={{ fontSize: '0.9rem', color: '#888' }}>
+                            The category <strong>"{file.category}"</strong> does not have a metadata extraction schema defined.<br />
+                            Metadata tagging is not supported for this document type.
+                        </p>
                     </div>
                 </div>
+            );
+        }
 
-                {/* General Fields table */}
-                {generalEntries.length > 0 && (
-                    <div style={{ marginBottom: '1.5rem', background: 'white', borderRadius: '12px', boxShadow: '0 1px 6px rgba(0,0,0,0.07)', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                        <div style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', padding: '10px 16px' }}>
-                            <h4 style={{ margin: 0, color: 'white', fontSize: '0.88rem', fontWeight: 700, letterSpacing: '0.03em' }}>
-                                📋 General Fields
-                            </h4>
-                        </div>
-                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <tbody>
-                                {generalEntries.map(([k, v], i) => (
-                                    <tr key={k} style={{ background: i % 2 === 0 ? '#fafafa' : 'white' }}>
-                                        <td style={labelStyle}>{fmtKey(k)}</td>
-                                        <td style={valStyle}>{formatVal(v)}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+        // ── State: already tagged — show metadata ─────────────────────────
+        if (hasData && !isProcessing) {
+            const generalEntries = [];
+            const componentSections = [];
+            for (const [key, val] of Object.entries(mj)) {
+                if (Array.isArray(val)) componentSections.push({ key, items: val });
+                else if (val !== null && typeof val === 'object') componentSections.push({ key, items: [val] });
+                else generalEntries.push([key, val]);
+            }
+
+            const fmtKey = (k) => k.replace(/_/g, ' ');
+            const formatVal = (v) => {
+                if (v === null || v === undefined) return '—';
+                if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+                if (typeof v === 'object') return JSON.stringify(v);
+                return String(v);
+            };
+            const labelStyle = { fontSize: '0.78rem', color: '#64748b', fontWeight: 600, padding: '9px 14px', borderBottom: '1px solid #f1f5f9', whiteSpace: 'nowrap', width: '35%', textTransform: 'capitalize', background: '#f8fafc' };
+            const valStyle = { fontSize: '0.82rem', color: '#1e293b', padding: '9px 14px', borderBottom: '1px solid #f1f5f9', wordBreak: 'break-word' };
+            const thStyle = { fontSize: '0.72rem', color: '#3b4a6b', fontWeight: 700, textTransform: 'capitalize', padding: '9px 12px', background: '#eef2ff', borderBottom: '2px solid #c7d2fe', whiteSpace: 'nowrap', textAlign: 'left' };
+            const tdStyle = { fontSize: '0.78rem', color: '#1e293b', padding: '8px 12px', borderBottom: '1px solid #f1f5f9', wordBreak: 'break-word', verticalAlign: 'top' };
+
+            return (
+                <div>
+                    <FileHeader />
+                    {/* Re-tag button */}
+                    <div style={{ marginBottom: '1rem', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <button
+                            onClick={() => processFile(file)}
+                            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 16px', borderRadius: '8px', border: 'none', background: 'linear-gradient(135deg,#0ea5e9,#6366f1)', color: 'white', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer', boxShadow: '0 2px 8px rgba(99,102,241,0.25)' }}
+                            onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
+                            onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                        >
+                            🔄 Re-tag this file
+                        </button>
+                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Re-run Gemini tagging to refresh metadata</span>
                     </div>
-                )}
 
-                {/* Component Sections — one table per array/object field */}
-                {componentSections.map(({ key, items }) => {
-                    if (!items || items.length === 0) return null;
+                    {/* General Fields */}
+                    {generalEntries.length > 0 && (
+                        <div style={{ marginBottom: '1.5rem', background: 'white', borderRadius: '12px', boxShadow: '0 1px 6px rgba(0,0,0,0.07)', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                            <div style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', padding: '10px 16px' }}>
+                                <h4 style={{ margin: 0, color: 'white', fontSize: '0.88rem', fontWeight: 700 }}>📋 General Fields</h4>
+                            </div>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <tbody>
+                                    {generalEntries.map(([k, v], i) => (
+                                        <tr key={k} style={{ background: i % 2 === 0 ? '#fafafa' : 'white' }}>
+                                            <td style={labelStyle}>{fmtKey(k)}</td>
+                                            <td style={valStyle}>{formatVal(v)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
 
-                    // Collect all column keys across all items
-                    const colKeys = [];
-                    for (const item of items) {
-                        if (item && typeof item === 'object' && !Array.isArray(item)) {
-                            for (const k of Object.keys(item)) {
-                                if (!colKeys.includes(k)) colKeys.push(k);
+                    {/* Component tables */}
+                    {componentSections.map(({ key, items }) => {
+                        if (!items || items.length === 0) return null;
+                        const colKeys = [];
+                        for (const item of items) {
+                            if (item && typeof item === 'object' && !Array.isArray(item)) {
+                                for (const k of Object.keys(item)) { if (!colKeys.includes(k)) colKeys.push(k); }
                             }
                         }
-                    }
-                    if (colKeys.length === 0) return null;
+                        if (colKeys.length === 0) return null;
+                        return (
+                            <div key={key} style={{ marginBottom: '1.5rem', background: 'white', borderRadius: '12px', boxShadow: '0 1px 6px rgba(0,0,0,0.07)', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                                <div style={{ background: 'linear-gradient(135deg, #0ea5e9, #38bdf8)', padding: '10px 16px' }}>
+                                    <h4 style={{ margin: 0, color: 'white', fontSize: '0.88rem', fontWeight: 700 }}>🔩 {fmtKey(key)}</h4>
+                                </div>
+                                <div style={{ overflowX: 'auto' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '400px' }}>
+                                        <thead><tr>{colKeys.map(k => <th key={k} style={thStyle}>{fmtKey(k)}</th>)}</tr></thead>
+                                        <tbody>
+                                            {items.map((item, i) => (
+                                                item && typeof item === 'object' && !Array.isArray(item) ? (
+                                                    <tr key={i} style={{ background: i % 2 === 0 ? '#fafafa' : 'white' }}>
+                                                        {colKeys.map(k => <td key={k} style={tdStyle}>{formatVal(item[k])}</td>)}
+                                                    </tr>
+                                                ) : (
+                                                    <tr key={i}><td colSpan={colKeys.length} style={tdStyle}>{formatVal(item)}</td></tr>
+                                                )
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            );
+        }
 
-                    return (
-                        <div key={key} style={{ marginBottom: '1.5rem', background: 'white', borderRadius: '12px', boxShadow: '0 1px 6px rgba(0,0,0,0.07)', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                            <div style={{ background: 'linear-gradient(135deg, #0ea5e9, #38bdf8)', padding: '10px 16px' }}>
-                                <h4 style={{ margin: 0, color: 'white', fontSize: '0.88rem', fontWeight: 700, letterSpacing: '0.03em' }}>
-                                    🔩 {fmtKey(key)}
-                                </h4>
-                            </div>
-                            <div style={{ overflowX: 'auto' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '400px' }}>
-                                    <thead>
-                                        <tr>
-                                            {colKeys.map(k => <th key={k} style={thStyle}>{fmtKey(k)}</th>)}
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {items.map((item, i) => (
-                                            item && typeof item === 'object' && !Array.isArray(item) ? (
-                                                <tr key={i} style={{ background: i % 2 === 0 ? '#fafafa' : 'white' }}>
-                                                    {colKeys.map(k => <td key={k} style={tdStyle}>{formatVal(item[k])}</td>)}
-                                                </tr>
-                                            ) : (
-                                                <tr key={i}>
-                                                    <td colSpan={colKeys.length} style={tdStyle}>{formatVal(item)}</td>
-                                                </tr>
-                                            )
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    );
-                })}
+        // ── State: processing spinner ─────────────────────────────────────
+        if (isProcessing) {
+            return (
+                <div>
+                    <FileHeader />
+                    <div style={{ textAlign: 'center', padding: '3rem' }}>
+                        <Loader size={48} className="spinner" style={{ color: '#6366f1', marginBottom: '1rem' }} />
+                        <h3 style={{ color: '#444', marginBottom: '0.5rem' }}>Processing…</h3>
+                        <p style={{ fontSize: '0.9rem', color: '#666' }}>
+                            {!hasText
+                                ? 'Downloading from Box and extracting text, then running Gemini tagging…'
+                                : 'Sending text to Gemini for metadata extraction…'}
+                        </p>
+                        <p style={{ fontSize: '0.78rem', color: '#999', marginTop: '0.5rem' }}>This may take up to 60 seconds.</p>
+                    </div>
+                </div>
+            );
+        }
+
+        // ── State: error ──────────────────────────────────────────────────
+        if (procState.status === 'error') {
+            return (
+                <div>
+                    <FileHeader />
+                    <div style={{ textAlign: 'center', padding: '2rem' }}>
+                        <AlertCircle size={48} style={{ color: '#dc2626', marginBottom: '1rem' }} />
+                        <h3 style={{ color: '#dc2626', marginBottom: '0.5rem' }}>Processing Failed</h3>
+                        <p style={{ fontSize: '0.9rem', color: '#7f1d1d', marginBottom: '1.5rem', maxWidth: '400px', margin: '0 auto 1.5rem' }}>{procState.message}</p>
+                        <button
+                            onClick={() => processFile(file)}
+                            style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', background: '#dc2626', color: 'white', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}
+                        >
+                            🔄 Retry
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // ── State: has text, no metadata ──────────────────────────────────
+        if (hasText && !hasData) {
+            return (
+                <div>
+                    <FileHeader />
+                    <div style={{ textAlign: 'center', padding: '2.5rem' }}>
+                        <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>🤖</div>
+                        <h3 style={{ color: '#444', marginBottom: '0.5rem' }}>Ready to Tag</h3>
+                        <p style={{ fontSize: '0.9rem', color: '#666', marginBottom: '1.5rem', lineHeight: 1.6 }}>
+                            Text has already been extracted for this file.<br />
+                            Click below to send it to Gemini and generate metadata.
+                        </p>
+                        <button
+                            onClick={() => processFile(file)}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 24px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg,#0ea5e9,#6366f1)', color: 'white', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', boxShadow: '0 4px 14px rgba(99,102,241,0.35)' }}
+                            onMouseEnter={e => e.currentTarget.style.opacity = '0.88'}
+                            onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                        >
+                            🤖 Tag this File
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // ── State: no text, no metadata ───────────────────────────────────
+        return (
+            <div>
+                <FileHeader />
+                <div style={{ textAlign: 'center', padding: '2.5rem' }}>
+                    <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>📝</div>
+                    <h3 style={{ color: '#444', marginBottom: '0.5rem' }}>Not Yet Processed</h3>
+                    <p style={{ fontSize: '0.9rem', color: '#666', marginBottom: '1.5rem', lineHeight: 1.6 }}>
+                        No text has been extracted for this file yet.<br />
+                        Click below to download from Box, extract text, and generate metadata in one step.
+                    </p>
+                    <button
+                        onClick={() => processFile(file)}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 24px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg,#7c3aed,#6366f1)', color: 'white', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', boxShadow: '0 4px 14px rgba(124,58,237,0.35)' }}
+                        onMouseEnter={e => e.currentTarget.style.opacity = '0.88'}
+                        onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                    >
+                        📝 Extract Text &amp; Tag
+                    </button>
+                </div>
             </div>
         );
     };
 
+
+
+
     // ── Guards ────────────────────────────────────────────────────────────
+
     if (loading) {
         return (
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>

@@ -200,8 +200,8 @@ def get_file_metadata(
 ):
     """
     Returns all segregation result rows for an engine with their metadata_json.
-    Used by the frontend META DATA TAGGING tab to render the folder hierarchy sidebar
-    and display metadata in the main panel when a file is clicked.
+    Also returns has_text (bool) and has_schema (bool) so the frontend can
+    immediately show the right action state without an extra API call.
     """
     engine = (
         db.query(models.Engine)
@@ -217,6 +217,8 @@ def get_file_metadata(
         .all()
     )
 
+    schema_categories = set(meta_service.Pydantic_Schema_mapping_dict.keys())
+
     return [
         {
             "id": r.id,
@@ -228,6 +230,52 @@ def get_file_metadata(
             "latest": r.latest,
             "confidence": r.confidence,
             "metadata_json": r.metadata_json,
+            # Pre-computed state flags for the frontend viewer
+            "has_text": bool(r.raw_text and r.raw_text.strip()),
+            "has_schema": r.category in schema_categories,
         }
         for r in rows
     ]
+
+
+@router.post("/process-file/{engine_id}/{result_id}")
+def process_single_file(
+    engine_id: int,
+    result_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """
+    On-demand single-file processing:
+      1. If raw_text is empty → download from Box and extract text
+      2. If category has a Pydantic schema → call Gemini and save metadata_json
+    Returns the resulting metadata_json and state flags.
+    This is synchronous (blocking) so the frontend can await it directly.
+    """
+    # Verify engine ownership
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    # Verify the result belongs to this engine
+    row = (
+        db.query(models.SegregationResult)
+        .filter(
+            models.SegregationResult.id == result_id,
+            models.SegregationResult.engine_id == engine_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="File record not found")
+
+    result = meta_service.process_single_file(result_id, db)
+
+    if result.get("error"):
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return result

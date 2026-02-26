@@ -493,3 +493,65 @@ def perform_metadata_tagging(engine_id: int, db: Session):
             _tagging_status[engine_id] = {"status": "error", "total": 0, "completed": 0, "error": err_msg}
         print(f"[MetadataTagging] Failed for engine {engine_id}: {e}")
 
+
+# ─────────────────────────────────────────────────────────────
+# SINGLE-FILE ON-DEMAND PROCESSING
+# ─────────────────────────────────────────────────────────────
+def process_single_file(result_id: int, db: Session) -> dict:
+    """
+    On-demand synchronous processing for a single SegregationResult row:
+      1. If raw_text is empty → download from Box + extract text → save to DB
+      2. If category has a Pydantic schema → call Gemini → save metadata_json to DB
+    Returns a summary dict with the resulting metadata_json and status flags.
+    """
+    row = db.query(models.SegregationResult).filter(
+        models.SegregationResult.id == result_id
+    ).first()
+
+    if not row:
+        return {"error": "File record not found", "metadata_json": None}
+
+    has_schema = row.category in Pydantic_Schema_mapping_dict
+    extraction_done = False
+
+    # ── Step 1: Extract text if missing ──────────────────────────────────
+    if not row.raw_text or row.raw_text.strip() == "":
+        print(f"[SingleFile] Row {result_id}: no text — downloading from Box...")
+        ext_result = _extract_single_file(row.id, row.box_file_id, row.box_file_name)
+        try:
+            row.raw_text = ext_result.get("raw_text", "")
+            row.cleaned_text = ext_result.get("cleaned_text", "")
+            row.text_extraction_status = ext_result.get("text_extraction_status", "")
+            row.reason = ext_result.get("reason", "")
+            db.commit()
+            extraction_done = True
+            print(f"[SingleFile] Row {result_id}: text extracted — status: {row.text_extraction_status}")
+        except Exception as e:
+            db.rollback()
+            return {"error": f"Text extraction failed: {e}", "metadata_json": None}
+
+    # ── Step 2: Tag with Gemini if schema available ───────────────────────
+    if has_schema and row.raw_text and row.raw_text.strip():
+        schema_cls = Pydantic_Schema_mapping_dict[row.category]
+        print(f"[SingleFile] Row {result_id}: tagging with Gemini ({row.category})...")
+        tag_result = _tag_single_row(result_id, row.raw_text, schema_cls)
+        try:
+            row.metadata_json = tag_result["metadata_json"]
+            db.commit()
+            print(f"[SingleFile] Row {result_id}: tagging done.")
+        except Exception as e:
+            db.rollback()
+            return {"error": f"Metadata tagging failed: {e}", "metadata_json": None}
+
+    # ── Refresh and return ────────────────────────────────────────────────
+    db.refresh(row)
+    return {
+        "error": None,
+        "metadata_json": row.metadata_json,
+        "has_text": bool(row.raw_text and row.raw_text.strip()),
+        "has_schema": has_schema,
+        "extraction_done": extraction_done,
+        "text_extraction_status": row.text_extraction_status or "",
+    }
+
+
