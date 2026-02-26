@@ -190,3 +190,44 @@ def get_tagging_status(
 
     status = meta_service.get_tagging_status(engine_id)
     return status
+
+
+@router.get("/file-metadata/{engine_id}")
+def get_file_metadata(
+    engine_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Returns all segregation result rows for an engine with their metadata_json.
+    Used by the frontend META DATA TAGGING tab to render the folder hierarchy sidebar
+    and display metadata in the main panel when a file is clicked.
+    """
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    rows = (
+        db.query(models.SegregationResult)
+        .filter(models.SegregationResult.engine_id == engine_id)
+        .all()
+    )
+
+    return [
+        {
+            "id": r.id,
+            "box_file_id": r.box_file_id,
+            "box_file_name": r.box_file_name,
+            "category": r.category,
+            "method": r.method,
+            "original_folder_path": r.original_folder_path,
+            "latest": r.latest,
+            "confidence": r.confidence,
+            "metadata_json": r.metadata_json,
+        }
+        for r in rows
+    ]

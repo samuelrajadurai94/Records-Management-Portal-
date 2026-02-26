@@ -74,6 +74,11 @@ export default function EngineDetails() {
     const [taggingPollInterval, setTaggingPollInterval] = useState(null);
     const [taggingError, setTaggingError] = useState(null);
 
+    // Metadata Viewer state (META DATA TAGGING tab sidebar + panel)
+    const [metaFiles, setMetaFiles] = useState([]);
+    const [metaSelectedFile, setMetaSelectedFile] = useState(null);
+    const [metaExpandedCategories, setMetaExpandedCategories] = useState({});
+
     const tabs = ['RAW FOLDER', 'FOLDER SEGREGATION', 'META DATA TAGGING', 'OPEN ITEM LIST', 'LLP TRACE', 'MINIPACK'];
 
     // ── Fetch file stats for metadata tab ──────────────────────────────────
@@ -91,12 +96,23 @@ export default function EngineDetails() {
         }
     }, [id, extractionStatus]);
 
-    // Auto-fetch stats when switching to META DATA TAGGING tab
+    // Fetch all files with metadata_json for the sidebar viewer
+    const fetchMetaFiles = useCallback(async () => {
+        try {
+            const res = await api.get(`/metadata/file-metadata/${id}`);
+            setMetaFiles(res.data);
+        } catch (err) {
+            console.error('Failed to fetch meta files:', err);
+        }
+    }, [id]);
+
+    // Auto-fetch stats + meta files when switching to META DATA TAGGING tab
     useEffect(() => {
         if (activeTab === 'META DATA TAGGING') {
             fetchFileStats();
+            fetchMetaFiles();
         }
-    }, [activeTab, fetchFileStats]);
+    }, [activeTab, fetchFileStats, fetchMetaFiles]);
 
     // ── Start Metadata Tagging ──────────────────────────────────────────────
     const startMetadataTagging = useCallback(async () => {
@@ -114,6 +130,7 @@ export default function EngineDetails() {
                         clearInterval(interval);
                         setTaggingPollInterval(null);
                         setTaggingStatus('done');
+                        fetchMetaFiles(); // ← refresh sidebar after tagging completes
                     } else if (data.status === 'error') {
                         clearInterval(interval);
                         setTaggingPollInterval(null);
@@ -130,7 +147,7 @@ export default function EngineDetails() {
             setTaggingStatus('error');
             setTaggingError(err?.response?.data?.detail || 'Failed to start metadata tagging.');
         }
-    }, [id]);
+    }, [id, fetchMetaFiles]);
 
     // ── Fetch engine + Box structure ─────────────────────────────────────
     const fetchEngineData = useCallback(async () => {
@@ -379,7 +396,12 @@ export default function EngineDetails() {
                 root.files.push(file);
                 continue;
             }
-            const parts = pathStr.split('/').filter(Boolean);
+            // Skip the first segment (root/engine folder) — start hierarchy from sub-folders
+            const parts = pathStr.split('/').filter(Boolean).slice(1);
+            if (parts.length === 0) {
+                root.files.push(file);
+                continue;
+            }
             let node = root;
             for (const part of parts) {
                 if (!node.children[part]) {
@@ -796,6 +818,451 @@ export default function EngineDetails() {
                         )}
                     </div>
                 )}
+            </div>
+        );
+    };
+
+    // ── META DATA TAGGING: sidebar component ─────────────────────────────
+    const MetaFileSidebar = () => {
+        const hasMetadata = (f) => f.metadata_json && Object.keys(f.metadata_json).length > 0;
+
+        // Group flat array into category → files (same structure as segData.segregated)
+        const segregated = {};
+        for (const f of metaFiles) {
+            const cat = f.category || 'Unclassified';
+            if (!segregated[cat]) segregated[cat] = [];
+            segregated[cat].push(f);
+        }
+
+        // ── Flat file item (mirrors SegFlatFileItem) ──────────────────────
+        const MetaFlatFileItem = ({ file }) => {
+            const mStyle = METHOD_COLORS[file.method] || METHOD_COLORS['Unclassified'];
+            const isSelected = metaSelectedFile?.id === file.id;
+            const tagged = hasMetadata(file);
+            return (
+                <div
+                    onClick={() => setMetaSelectedFile(file)}
+                    style={{
+                        display: 'flex', flexDirection: 'column',
+                        paddingLeft: '28px', paddingRight: '8px',
+                        paddingTop: '5px', paddingBottom: '5px',
+                        cursor: 'pointer', borderRadius: '4px',
+                        background: isSelected ? 'var(--primary)' : 'transparent',
+                        color: isSelected ? 'white' : 'inherit',
+                        marginBottom: '1px', transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.7)'; }}
+                    onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+                >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <FileText size={12} style={{ flexShrink: 0, opacity: 0.7 }} />
+                        <span style={{
+                            fontSize: '0.78rem', fontWeight: 500,
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1
+                        }}>{file.box_file_name}</span>
+                        {tagged && <span style={{ fontSize: '0.65rem', flexShrink: 0 }}>🏷️</span>}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingLeft: '18px', marginTop: '2px' }}>
+                        <span style={{
+                            fontSize: '0.65rem', padding: '1px 5px', borderRadius: '8px',
+                            background: isSelected ? 'rgba(255,255,255,0.25)' : mStyle.bg,
+                            color: isSelected ? 'white' : mStyle.color, fontWeight: 600
+                        }}>{file.method}</span>
+                        {file.confidence > 0 && (
+                            <span style={{ fontSize: '0.63rem', opacity: 0.7 }}>
+                                {(file.confidence * 100).toFixed(0)}%
+                            </span>
+                        )}
+                        {file.original_folder_path && (
+                            <span style={{
+                                fontSize: '0.6rem', opacity: 0.55,
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '120px'
+                            }} title={file.original_folder_path}>
+                                📂 {file.original_folder_path.split('/').pop()}
+                            </span>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // ── Recursive folder node (mirrors SegFolderNode) ─────────────────
+        const MetaFolderNode = ({ node, level = 1, pathKey = '' }) => {
+            const nodeKey = pathKey ? `${pathKey}/${node.name}` : node.name;
+            const stateKey = `_mf_${nodeKey}`;
+            const isOpen = !!metaExpandedCategories[stateKey];
+            const childEntries = Object.values(node.children);
+            const hasContent = childEntries.length > 0 || node.files.length > 0;
+            if (!hasContent) return null;
+
+            const countFiles = (n) => {
+                let c = n.files.length;
+                for (const ch of Object.values(n.children)) c += countFiles(ch);
+                return c;
+            };
+            const fileCount = countFiles(node);
+
+            return (
+                <div>
+                    <div
+                        onClick={() => setMetaExpandedCategories(prev => ({ ...prev, [stateKey]: !prev[stateKey] }))}
+                        style={{
+                            display: 'flex', alignItems: 'center',
+                            padding: '6px 8px', paddingLeft: `${10 + level * 18}px`,
+                            cursor: 'pointer', background: 'transparent',
+                            color: 'var(--primary)', borderRadius: '5px',
+                            marginBottom: '1px', fontWeight: 500,
+                            fontSize: '0.8rem', transition: 'background 0.15s',
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.6)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                    >
+                        <span style={{ marginRight: '4px', display: 'flex', alignItems: 'center' }}>
+                            {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                        </span>
+                        {isOpen
+                            ? <FolderOpen size={14} style={{ marginRight: '6px', color: '#f59e0b' }} />
+                            : <Folder size={14} style={{ marginRight: '6px', color: '#f59e0b' }} />}
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+                        <span style={{ background: '#e8eaf6', color: '#3949ab', borderRadius: '10px', padding: '0px 6px', fontSize: '0.65rem', fontWeight: 700, marginLeft: '4px' }}>{fileCount}</span>
+                    </div>
+
+                    {isOpen && (
+                        <>
+                            {childEntries.sort((a, b) => a.name.localeCompare(b.name)).map(child => (
+                                <MetaFolderNode key={child.name} node={child} level={level + 1} pathKey={nodeKey} />
+                            ))}
+                            {node.files.map(file => {
+                                const mStyle = METHOD_COLORS[file.method] || METHOD_COLORS['Unclassified'];
+                                const isSelected = metaSelectedFile?.id === file.id;
+                                const tagged = hasMetadata(file);
+                                return (
+                                    <div
+                                        key={file.id}
+                                        onClick={() => setMetaSelectedFile(file)}
+                                        style={{
+                                            display: 'flex', flexDirection: 'column',
+                                            paddingLeft: `${10 + (level + 1) * 18}px`, paddingRight: '8px',
+                                            paddingTop: '4px', paddingBottom: '4px',
+                                            cursor: 'pointer', borderRadius: '4px',
+                                            background: isSelected ? 'var(--primary)' : 'transparent',
+                                            color: isSelected ? 'white' : 'inherit',
+                                            marginBottom: '1px', transition: 'background 0.15s',
+                                        }}
+                                        onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.7)'; }}
+                                        onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            <FileText size={12} style={{ flexShrink: 0, opacity: 0.7 }} />
+                                            <span style={{ fontSize: '0.76rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                                                {file.box_file_name}
+                                            </span>
+                                            {tagged && <span style={{ fontSize: '0.65rem', flexShrink: 0 }}>🏷️</span>}
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingLeft: '18px', marginTop: '2px', flexWrap: 'wrap' }}>
+                                            <span style={{
+                                                fontSize: '0.63rem', padding: '1px 5px', borderRadius: '8px',
+                                                background: isSelected ? 'rgba(255,255,255,0.25)' : mStyle.bg,
+                                                color: isSelected ? 'white' : mStyle.color, fontWeight: 600
+                                            }}>{file.method}</span>
+                                            {file.confidence > 0 && (
+                                                <span style={{ fontSize: '0.63rem', opacity: 0.7 }}>
+                                                    {(file.confidence * 100).toFixed(0)}%
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </>
+                    )}
+                </div>
+            );
+        };
+
+        return (
+            <>
+                {Object.entries(segregated).map(([category, files]) => {
+                    const catKey = `_mcat_${category}`;
+                    const isCatOpen = !!metaExpandedCategories[catKey];
+
+                    // Same split as SegCategoryTree
+                    const treeFiles = files.filter(f => TREE_METHODS.has(f.method) && !f.latest);
+                    const flatFiles = files.filter(f => !TREE_METHODS.has(f.method) && !f.latest);
+                    const latestFiles = files.filter(f => f.latest);
+                    const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles) : null;
+
+                    return (
+                        <div key={category}>
+                            {/* Category folder row */}
+                            <div
+                                onClick={() => setMetaExpandedCategories(prev => ({ ...prev, [catKey]: !prev[catKey] }))}
+                                style={{
+                                    display: 'flex', alignItems: 'center',
+                                    padding: '8px 10px', cursor: 'pointer',
+                                    background: 'transparent', color: 'var(--primary)',
+                                    borderRadius: '6px', marginBottom: '2px',
+                                    fontWeight: 600, fontSize: '0.85rem',
+                                    transition: 'background 0.2s',
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'white'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                            >
+                                <span style={{ marginRight: '4px', display: 'flex', alignItems: 'center' }}>
+                                    {isCatOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                                </span>
+                                {isCatOpen
+                                    ? <FolderOpen size={15} style={{ marginRight: '6px', color: '#f59e0b' }} />
+                                    : <Folder size={15} style={{ marginRight: '6px', color: '#f59e0b' }} />}
+                                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {getCategoryIcon(category)} {category}
+                                </span>
+                                <span style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: '10px', padding: '1px 7px', fontSize: '0.7rem', fontWeight: 700, marginLeft: '4px' }}>
+                                    {files.length}
+                                </span>
+                                {files.some(hasMetadata) && (
+                                    <span style={{ fontSize: '0.65rem', marginLeft: '3px', flexShrink: 0 }}>🏷️</span>
+                                )}
+                            </div>
+
+                            {/* Expanded content — mirrors SegCategoryTree exactly */}
+                            {isCatOpen && (() => {
+                                const latestKey = `_mlatest_${category}`;
+                                const isLatestOpen = !!metaExpandedCategories[latestKey];
+                                return (
+                                    <>
+                                        {/* ⭐ Latest folder */}
+                                        {latestFiles.length > 0 && (
+                                            <div>
+                                                <div
+                                                    onClick={() => setMetaExpandedCategories(prev => ({ ...prev, [latestKey]: !prev[latestKey] }))}
+                                                    style={{
+                                                        display: 'flex', alignItems: 'center',
+                                                        padding: '6px 8px', paddingLeft: '28px',
+                                                        cursor: 'pointer', background: 'transparent',
+                                                        color: '#2e7d32', borderRadius: '5px',
+                                                        marginBottom: '1px', fontWeight: 600,
+                                                        fontSize: '0.8rem', transition: 'background 0.15s',
+                                                    }}
+                                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(232,245,233,0.7)'; }}
+                                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                                >
+                                                    <span style={{ marginRight: '4px', display: 'flex', alignItems: 'center' }}>
+                                                        {isLatestOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                                    </span>
+                                                    {isLatestOpen
+                                                        ? <FolderOpen size={14} style={{ marginRight: '6px', color: '#2e7d32' }} />
+                                                        : <Folder size={14} style={{ marginRight: '6px', color: '#2e7d32' }} />}
+                                                    <span style={{ flex: 1 }}>⭐ Latest</span>
+                                                    <span style={{ background: '#e8f5e9', color: '#2e7d32', borderRadius: '10px', padding: '0px 6px', fontSize: '0.65rem', fontWeight: 700, marginLeft: '4px' }}>
+                                                        {latestFiles.length}
+                                                    </span>
+                                                </div>
+                                                {isLatestOpen && latestFiles.map(file => (
+                                                    <MetaFlatFileItem key={`mllatest_${file.id}`} file={file} />
+                                                ))}
+                                            </div>
+                                        )}
+                                        {/* Tree-rendered files (Folder Match / Manual / Extension / Unclassified) */}
+                                        {folderTree && (
+                                            <>
+                                                {folderTree.files.map(file => (
+                                                    <MetaFlatFileItem key={file.id} file={file} />
+                                                ))}
+                                                {Object.values(folderTree.children)
+                                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                                    .map(child => (
+                                                        <MetaFolderNode key={child.name} node={child} level={1} pathKey={category} />
+                                                    ))
+                                                }
+                                            </>
+                                        )}
+                                        {/* Flat-rendered files (Direct Keyword / AI MODEL) */}
+                                        {flatFiles.map(file => (
+                                            <MetaFlatFileItem key={file.id} file={file} />
+                                        ))}
+                                    </>
+                                );
+                            })()}
+                        </div>
+                    );
+                })}
+            </>
+        );
+    };
+
+    // ── META DATA TAGGING: metadata viewer panel ──────────────────────────
+    const MetadataViewer = ({ file }) => {
+        if (!file) {
+            return (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', textAlign: 'center', opacity: 0.55 }}>
+                    <FileText size={60} style={{ marginBottom: '1rem', opacity: 0.3, color: '#6366f1' }} />
+                    <h3 style={{ marginBottom: '0.5rem', color: '#444' }}>Select a File</h3>
+                    <p style={{ fontSize: '0.9rem', color: '#666', maxWidth: '340px', lineHeight: 1.6 }}>
+                        Click any file in the sidebar to view its tagged metadata here.
+                    </p>
+                </div>
+            );
+        }
+
+        const mj = file.metadata_json;
+        const hasData = mj && Object.keys(mj).length > 0;
+
+        if (!hasData) {
+            return (
+                <div style={{ textAlign: 'center', padding: '3rem', opacity: 0.65 }}>
+                    <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>🏷️</div>
+                    <h3 style={{ marginBottom: '0.5rem', color: '#555' }}>{file.box_file_name}</h3>
+                    <p style={{ fontSize: '0.9rem', color: '#888' }}>
+                        No metadata tagged for this file yet.<br />
+                        Run <strong>Start Metadata Tagging</strong> to process it.
+                    </p>
+                </div>
+            );
+        }
+
+        // Partition keys into scalar (General Fields) vs array/object (Component tables)
+        const generalEntries = [];
+        const componentSections = [];
+        for (const [key, val] of Object.entries(mj)) {
+            if (Array.isArray(val)) {
+                componentSections.push({ key, items: val });
+            } else if (val !== null && typeof val === 'object') {
+                componentSections.push({ key, items: [val] });
+            } else {
+                generalEntries.push([key, val]);
+            }
+        }
+
+        const fmtKey = (k) => k.replace(/_/g, ' ');
+        const formatVal = (v) => {
+            if (v === null || v === undefined) return '—';
+            if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+            if (typeof v === 'object') return JSON.stringify(v);
+            return String(v);
+        };
+
+        const labelStyle = {
+            fontSize: '0.78rem', color: '#64748b', fontWeight: 600,
+            padding: '9px 14px', borderBottom: '1px solid #f1f5f9',
+            whiteSpace: 'nowrap', width: '35%', textTransform: 'capitalize',
+            background: '#f8fafc',
+        };
+        const valStyle = {
+            fontSize: '0.82rem', color: '#1e293b',
+            padding: '9px 14px', borderBottom: '1px solid #f1f5f9',
+            wordBreak: 'break-word',
+        };
+        const thStyle = {
+            fontSize: '0.72rem', color: '#3b4a6b', fontWeight: 700,
+            textTransform: 'capitalize', padding: '9px 12px',
+            background: '#eef2ff', borderBottom: '2px solid #c7d2fe',
+            whiteSpace: 'nowrap', textAlign: 'left',
+        };
+        const tdStyle = {
+            fontSize: '0.78rem', color: '#1e293b',
+            padding: '8px 12px', borderBottom: '1px solid #f1f5f9',
+            wordBreak: 'break-word', verticalAlign: 'top',
+        };
+
+        return (
+            <div>
+                {/* File Header Card */}
+                <div style={{
+                    display: 'flex', alignItems: 'flex-start', gap: '12px',
+                    marginBottom: '1.5rem', padding: '16px',
+                    background: 'white', borderRadius: '12px',
+                    boxShadow: '0 1px 6px rgba(0,0,0,0.07)', border: '1px solid #e2e8f0'
+                }}>
+                    <FileText size={38} color="#6366f1" style={{ flexShrink: 0, marginTop: '2px' }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: '1rem', color: '#1a202c', marginBottom: '6px', wordBreak: 'break-word' }}>
+                            {file.box_file_name}
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                            <span style={{ fontSize: '0.72rem', background: '#ede9fe', color: '#7c3aed', borderRadius: '20px', padding: '2px 10px', fontWeight: 600 }}>
+                                {file.category}
+                            </span>
+                            <span style={{ fontSize: '0.72rem', background: '#e0f2fe', color: '#0369a1', borderRadius: '20px', padding: '2px 10px', fontWeight: 600 }}>
+                                {file.method}
+                            </span>
+                            {file.original_folder_path && (
+                                <span style={{ fontSize: '0.7rem', background: '#f1f5f9', color: '#64748b', borderRadius: '20px', padding: '2px 10px', fontWeight: 500 }}>
+                                    📂 {file.original_folder_path.split('/').slice(-1)[0]}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* General Fields table */}
+                {generalEntries.length > 0 && (
+                    <div style={{ marginBottom: '1.5rem', background: 'white', borderRadius: '12px', boxShadow: '0 1px 6px rgba(0,0,0,0.07)', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                        <div style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', padding: '10px 16px' }}>
+                            <h4 style={{ margin: 0, color: 'white', fontSize: '0.88rem', fontWeight: 700, letterSpacing: '0.03em' }}>
+                                📋 General Fields
+                            </h4>
+                        </div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <tbody>
+                                {generalEntries.map(([k, v], i) => (
+                                    <tr key={k} style={{ background: i % 2 === 0 ? '#fafafa' : 'white' }}>
+                                        <td style={labelStyle}>{fmtKey(k)}</td>
+                                        <td style={valStyle}>{formatVal(v)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {/* Component Sections — one table per array/object field */}
+                {componentSections.map(({ key, items }) => {
+                    if (!items || items.length === 0) return null;
+
+                    // Collect all column keys across all items
+                    const colKeys = [];
+                    for (const item of items) {
+                        if (item && typeof item === 'object' && !Array.isArray(item)) {
+                            for (const k of Object.keys(item)) {
+                                if (!colKeys.includes(k)) colKeys.push(k);
+                            }
+                        }
+                    }
+                    if (colKeys.length === 0) return null;
+
+                    return (
+                        <div key={key} style={{ marginBottom: '1.5rem', background: 'white', borderRadius: '12px', boxShadow: '0 1px 6px rgba(0,0,0,0.07)', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                            <div style={{ background: 'linear-gradient(135deg, #0ea5e9, #38bdf8)', padding: '10px 16px' }}>
+                                <h4 style={{ margin: 0, color: 'white', fontSize: '0.88rem', fontWeight: 700, letterSpacing: '0.03em' }}>
+                                    🔩 {fmtKey(key)}
+                                </h4>
+                            </div>
+                            <div style={{ overflowX: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '400px' }}>
+                                    <thead>
+                                        <tr>
+                                            {colKeys.map(k => <th key={k} style={thStyle}>{fmtKey(k)}</th>)}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {items.map((item, i) => (
+                                            item && typeof item === 'object' && !Array.isArray(item) ? (
+                                                <tr key={i} style={{ background: i % 2 === 0 ? '#fafafa' : 'white' }}>
+                                                    {colKeys.map(k => <td key={k} style={tdStyle}>{formatVal(item[k])}</td>)}
+                                                </tr>
+                                            ) : (
+                                                <tr key={i}>
+                                                    <td colSpan={colKeys.length} style={tdStyle}>{formatVal(item)}</td>
+                                                </tr>
+                                            )
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    );
+                })}
             </div>
         );
     };
@@ -1252,72 +1719,40 @@ export default function EngineDetails() {
                         </div>
                     )}
 
-                    {/* Content area */}
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--background)' }}>
-                        {extractionStatus === 'idle' && (
-                            <div style={{ textAlign: 'center', opacity: 0.6, maxWidth: '420px' }}>
-                                <FileText size={52} style={{ marginBottom: '1rem', opacity: 0.4, color: '#7c3aed' }} />
-                                <h3 style={{ marginBottom: '0.5rem' }}>Text Extraction</h3>
-                                <p style={{ fontSize: '0.9rem', color: '#666', lineHeight: 1.6 }}>
-                                    Click <strong>📝 Text Extraction</strong> to extract text from all PDF files
-                                    that haven't been processed yet. This will download each PDF from Box,
-                                    run OCR if needed, and save the extracted text to the database.
-                                </p>
-                                {fileStats && fileStats.total_pdf_files > 0 && (
-                                    <p style={{ fontSize: '0.82rem', color: '#7c3aed', fontWeight: 600, marginTop: '0.75rem' }}>
-                                        ⏳ {fileStats.total_pdf_files - fileStats.pdfs_with_text} PDF files remaining to extract
-                                    </p>
-                                )}
-                            </div>
-                        )}
-                        {extractionStatus === 'all_done' && (
-                            <div style={{ textAlign: 'center', opacity: 0.85, maxWidth: '420px' }}>
-                                <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>🌟</div>
-                                <h3 style={{ marginBottom: '0.5rem', color: '#16a34a' }}>All Files Extracted</h3>
-                                <p style={{ fontSize: '0.9rem', color: '#666', lineHeight: 1.6 }}>
-                                    All <strong>{fileStats?.total_pdf_files || 0}</strong> PDF files already have extracted text.
-                                    No further extraction is needed. You can click the button again to re-check.
-                                </p>
-                            </div>
-                        )}
-                        {extractionStatus === 'running' && (
-                            <div style={{ textAlign: 'center', maxWidth: '420px' }}>
-                                <Loader size={48} className="spinner" style={{ color: '#7c3aed', marginBottom: '1rem' }} />
-                                <p style={{ color: '#555', fontSize: '1rem', marginBottom: '0.5rem' }}>
-                                    Extracting text from PDF files...
-                                </p>
-                                <p style={{ color: '#999', fontSize: '0.85rem' }}>
-                                    Processing {extractionProgress.completed} of {extractionProgress.total} files.
-                                    This may take several minutes for large engines.
-                                </p>
-                                {extractionProgress.total > 0 && (
-                                    <div style={{ margin: '1rem auto', maxWidth: '300px', height: '8px', background: '#e5e7eb', borderRadius: '4px', overflow: 'hidden' }}>
-                                        <div style={{
-                                            height: '100%', borderRadius: '4px',
-                                            background: 'linear-gradient(90deg, #7c3aed, #a855f7)',
-                                            width: `${(extractionProgress.completed / extractionProgress.total) * 100}%`,
-                                            transition: 'width 0.5s ease'
-                                        }} />
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                        {extractionStatus === 'done' && (
-                            <div style={{ textAlign: 'center', opacity: 0.8, maxWidth: '420px' }}>
-                                <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>✅</div>
-                                <h3 style={{ marginBottom: '0.5rem', color: '#16a34a' }}>Extraction Complete</h3>
-                                <p style={{ fontSize: '0.9rem', color: '#666' }}>
-                                    Successfully extracted text from <strong>{extractionProgress.total}</strong> files.
-                                    The data has been saved to the database and is ready for further processing.
-                                </p>
-                            </div>
-                        )}
-                        {extractionStatus === 'error' && (
-                            <div style={{ textAlign: 'center', color: '#c62828' }}>
-                                <AlertCircle size={48} style={{ marginBottom: '1rem' }} />
-                                <p>Text extraction failed. Check server logs and try again.</p>
-                            </div>
-                        )}
+                    {/* ── Split Panel: Sidebar + Metadata Viewer ── */}
+                    <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+
+                        {/* LEFT SIDEBAR: Folder Hierarchy */}
+                        <div style={{
+                            width: `${sidebarWidth}px`, background: '#E3F2FD',
+                            borderRight: '1px solid #e0e0e0', overflowY: 'auto',
+                            padding: '0.75rem 0.5rem', position: 'relative', flexShrink: 0
+                        }}>
+                            {metaFiles.length === 0 ? (
+                                <div style={{ textAlign: 'center', color: '#999', padding: '2rem 1rem', fontSize: '0.82rem' }}>
+                                    <Folder size={32} style={{ opacity: 0.3, marginBottom: '0.5rem', display: 'block', margin: '0 auto 0.5rem' }} />
+                                    <p>No files found.<br />Run segregation first.</p>
+                                </div>
+                            ) : <MetaFileSidebar />}
+
+                            {/* Resize handle */}
+                            <div
+                                onMouseDown={handleMouseDown}
+                                style={{
+                                    position: 'absolute', right: 0, top: 0, bottom: 0, width: '5px',
+                                    cursor: 'col-resize',
+                                    background: isResizing ? 'var(--primary)' : 'transparent',
+                                    transition: 'background 0.2s'
+                                }}
+                                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(2,62,138,0.3)'}
+                                onMouseLeave={(e) => !isResizing && (e.currentTarget.style.background = 'transparent')}
+                            />
+                        </div>
+
+                        {/* RIGHT PANEL: Metadata Viewer */}
+                        <div style={{ flex: 1, background: 'var(--background)', overflowY: 'auto', padding: '1.5rem' }}>
+                            <MetadataViewer file={metaSelectedFile} />
+                        </div>
                     </div>
                 </div>
             )}
