@@ -1,5 +1,7 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Text
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Text,text
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import JSONB
+
 from database import Base
 import datetime
 
@@ -62,5 +64,8 @@ class SegregationResult(Base):
     reason               = Column(String, default="")
     created_at           = Column(DateTime, default=datetime.datetime.utcnow)
     latest               = Column(Boolean, default=False)
+    text_extraction_status = Column(String(200), default="")
+    metadata_json = Column(JSONB,server_default=text("'{}'::jsonb"),nullable=True)
+
 
     engine = relationship("Engine", back_populates="segregation_results")

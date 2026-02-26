@@ -174,12 +174,12 @@ MEDIA_EXTENSIONS = {".mp4", ".png", ".jpeg", ".jpg", ".tif", ".heic", ".bmp"}
 
 FOLDER_RULES = [
     # (category_name, keywords, is_regex_AD_SB)
-    ("Engine Data Plate",          ["data plate"],                                          False),
+    ("33. Engine Data Plate",          ["data plate"],                                          False),
     ("14. Shop Visit Records",     ["sv", "shop", "visit"],                                 False),
     ("20. LLP BTB Trace",          ["btb", "back to birth", "llp btb", "llp traces"],       False),
     ("12. Manufacturer Delivery Docs", ["manufacture", "export certificate", "export cofa"], False),
     ("17. Commercial",             ["commercial"],                                           False),
-    ("Historical Misc",            ["historical miscellaneous", "misc", "miscellaneous", "historical misc"], False),
+    ("32. Historical Misc",            ["historical miscellaneous", "misc", "miscellaneous", "historical misc"], False),
     ("21. AD",                     ["AD"],                                                   "AD"),
     ("22. SB",                     ["SB"],                                                   "SB"),
     ("26. QEC-LRU Inventory",      ["QEC", "LRU", "Accessory", "accessory"],                False),
@@ -208,7 +208,7 @@ def _category_from_text(text: str) -> str | None:
         (["commercial"],                                  "17. Commercial"),
         (["preservation"],                                "18. Preservation"),
         (["llp"],                                         "19. LLP Summary"),
-        (["modification"],                                "23. In-House Modifications"),
+        (["modification"],                                "23. In-House Modifications(If applicable)"),
         (["qec", "lru", "accessory"],                     "26. QEC-LRU Inventory"),
         (["ldnd"],                                        "27. LDND-MPD"),
         (["ferry", "ferry flight"],                       "29. Ferry flight"),
@@ -363,8 +363,8 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
         else:
             result["raw_text"]     = all_text
             result["cleaned_text"] = clean
-            readable, score, valid = _check_readability(clean)
-            final_valid = [w for w in valid if w.lower() not in STOPLIST]
+            #readable, score, valid = _check_readability(clean)
+            #final_valid = [w for w in valid if w.lower() not in STOPLIST]
 
             if readable and len(final_valid) > 10:
                 result["status"] = "PDF readable"
@@ -417,24 +417,95 @@ def _walk_box_folder(folder_id: str, folder_path: str = "") -> list[dict]:
     return all_files
 
 # ─────────────────────────────────────────────────────────────
-# MAIN: PERFORM AUTO SEGREGATION
+# MAIN: PERFORM AUTO SEGREGATION  (multithreaded)
 # ─────────────────────────────────────────────────────────────
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+
+# Configurable thread pool size (default 4 workers)
+SEG_WORKERS = int(os.getenv("SEG_WORKERS", "4"))
+
 # In-memory job status: engine_id -> "idle" | "running" | "done" | "error"
 _job_status: dict[int, str] = {}
+_job_status_lock = threading.Lock()
 
 def get_job_status(engine_id: int) -> str:
     return _job_status.get(engine_id, "idle")
+
+
+def _process_single_file(engine_id: int, file_info: dict) -> dict:
+    """
+    Process a single file — classify it via folder match, AI/OCR, or extension.
+    This function is PURE (no DB access) so it is safe to run in threads.
+    Returns a result_data dict ready for DB insertion.
+    """
+    result_data = {
+        "engine_id":            engine_id,
+        "box_file_id":          file_info["box_file_id"],
+        "box_file_name":        file_info["box_file_name"],
+        "box_folder_id":        file_info["box_folder_id"],
+        "original_folder_path": file_info["original_folder_path"],
+        "method":               "Unclassified",
+        "status":               "",
+        "raw_text":             "",
+        "cleaned_text":         "",
+        "reason":               "",
+        "prediction":           "Manual Segregation",
+        "confidence":           0.0,
+        "category":             "Manual Segregation",
+        "latest":               False
+    }
+
+    # Phase 1: folder keyword match (fast, no I/O)
+    category = _folder_keyword_match(
+        file_info["original_folder_path"],
+        file_info["extension"]
+    )
+    if category:
+        result_data["category"]   = category
+        result_data["method"]     = "Folder Match"
+        result_data["prediction"] = category
+        result_data["status"]     = "Folder matched"
+    elif file_info["extension"] == ".pdf":
+        # Phase 2: AI/OCR classification for unmatched PDFs (slow – I/O + CPU)
+        try:
+            pdf_bytes = box_service.client.downloads.download_file(
+                file_info["box_file_id"]
+            ).read()
+            ai_result = _classify_pdf_bytes(pdf_bytes, file_info["box_file_name"])
+            Latest = check_latest([ai_result["raw_text"]], csn_value)
+            result_data["latest"] = True if Latest else False
+            result_data.update(ai_result)
+        except Exception as e:
+            result_data["status"]   = "Download error"
+            result_data["reason"]   = str(e)
+            result_data["category"] = "Manual Segregation"
+            result_data["latest"]   = False
+    else:
+        # Non-PDF, non-media, not folder matched
+        result_data["category"] = "Manual Segregation"
+        result_data["method"]   = "Extension"
+        result_data["status"]   = "Non-PDF non-media"
+        result_data["latest"]   = False
+
+    return result_data
+
 
 def perform_auto_segregation(engine_id: int, db: Session):
     """
     Full virtual segregation pipeline for a Box engine folder.
     Called in a background thread — no return value; results saved to DB.
+
+    Uses ThreadPoolExecutor to process files in parallel for faster
+    Box downloads and OCR / AI classification.
     """
-    _job_status[engine_id] = "running"
+    with _job_status_lock:
+        _job_status[engine_id] = "running"
     try:
         engine = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
         if not engine or not engine.box_folder_id:
-            _job_status[engine_id] = "error"
+            with _job_status_lock:
+                _job_status[engine_id] = "error"
             return
 
         # Find RAW FOLDER inside engine root
@@ -447,7 +518,11 @@ def perform_auto_segregation(engine_id: int, db: Session):
             raw_folder = {"id": engine.box_folder_id, "name": "ROOT"}
 
         # Walk entire Box tree
-        all_files = _walk_box_folder(raw_folder["id"])
+        all_files = _walk_box_folder(raw_folder["id"], raw_folder["name"])
+        total = len(all_files)
+        if total > 0:
+            print(f"[Segregation] First file sample: {all_files[0]['box_file_name']} path: {all_files[0]['original_folder_path']}")
+        print(f"[Segregation] Engine {engine_id}: found {total} files — processing with {SEG_WORKERS} threads")
 
         # Clear previous results for this engine
         db.query(models.SegregationResult).filter(
@@ -455,65 +530,61 @@ def perform_auto_segregation(engine_id: int, db: Session):
         ).delete()
         db.commit()
 
-        for file_info in all_files:
-            result_data = {
-                "engine_id":            engine_id,
-                "box_file_id":          file_info["box_file_id"],
-                "box_file_name":        file_info["box_file_name"],
-                "box_folder_id":        file_info["box_folder_id"],
-                "original_folder_path": file_info["original_folder_path"],
-                "method":               "Unclassified",
-                "status":               "",
-                "raw_text":             "",
-                "cleaned_text":         "",
-                "reason":               "",
-                "prediction":           "Manual Segregation",
-                "confidence":           0.0,
-                "category":             "Manual Segregation",
-                "latest":               False
+        # ── Multithreaded file processing ──────────────────────────────
+        results: list[dict] = []
+        completed = 0
+
+        with ThreadPoolExecutor(max_workers=SEG_WORKERS) as executor:
+            # Submit all files to the thread pool
+            future_to_file = {
+                executor.submit(_process_single_file, engine_id, fi): fi
+                for fi in all_files
             }
 
-            # Phase 1: folder keyword match
-            category = _folder_keyword_match(
-                file_info["original_folder_path"],
-                file_info["extension"]
-            )
-            if category:
-                result_data["category"]  = category
-                result_data["method"]    = "Folder Match"
-                result_data["prediction"] = category
-                result_data["status"]    = "Folder matched"
-            elif file_info["extension"] == ".pdf":
-                # Phase 2: AI/OCR classification for unmatched PDFs
+            # Collect results as they complete
+            for future in as_completed(future_to_file):
                 try:
-                    pdf_bytes = box_service.client.downloads.download_file(
-                        file_info["box_file_id"]
-                    ).read()
-                    ai_result = _classify_pdf_bytes(pdf_bytes, file_info["box_file_name"])
-                    Latest = check_latest([ai_result["raw_text"]],csn_value)
-                    if Latest:result_data["latest"] = True
-                    else : result_data["latest"] = False
-                    result_data.update(ai_result)
+                    result_data = future.result()
+                    results.append(result_data)
                 except Exception as e:
-                    result_data["status"] = "Download error"
-                    result_data["reason"] = str(e)
-                    result_data["category"] = "Manual Segregation"
-                    result_data["latest"] = False
-            else:
-                # Non-PDF, non-media, not folder matched
-                result_data["category"] = "Manual Segregation"
-                result_data["method"]   = "Extension"
-                result_data["status"]   = "Non-PDF non-media"
-                result_data["latest"]   = False
+                    file_info = future_to_file[future]
+                    print(f"[Segregation] Error processing {file_info['box_file_name']}: {e}")
+                    # Still add a fallback result so no file is silently lost
+                    results.append({
+                        "engine_id":            engine_id,
+                        "box_file_id":          file_info["box_file_id"],
+                        "box_file_name":        file_info["box_file_name"],
+                        "box_folder_id":        file_info["box_folder_id"],
+                        "original_folder_path": file_info["original_folder_path"],
+                        "method":               "Unclassified",
+                        "status":               "Thread error",
+                        "raw_text":             "",
+                        "cleaned_text":         "",
+                        "reason":               str(e),
+                        "prediction":           "Manual Segregation",
+                        "confidence":           0.0,
+                        "category":             "Manual Segregation",
+                        "latest":               False,
+                    })
 
+                completed += 1
+                if completed % 10 == 0 or completed == total:
+                    print(f"[Segregation] Engine {engine_id}: {completed}/{total} files processed")
+
+        # ── Batch-write all results to DB (single-threaded, safe) ──────
+        for result_data in results:
             db_row = models.SegregationResult(**result_data)
             db.add(db_row)
 
         db.commit()
-        _job_status[engine_id] = "done"
+        print(f"[Segregation] Engine {engine_id}: ✔ Done — {len(results)} files saved")
+        with _job_status_lock:
+            _job_status[engine_id] = "done"
 
     except Exception as e:
-        _job_status[engine_id] = "error"
+        with _job_status_lock:
+            _job_status[engine_id] = "error"
         print(f"Segregation failed for engine {engine_id}: {e}")
         import traceback
         traceback.print_exc()
+

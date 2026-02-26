@@ -1,0 +1,192 @@
+"""
+routers/metadata.py
+-------------------
+Endpoints for triggering and monitoring text extraction on segregation results.
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from sqlalchemy.orm import Session
+
+import database, models, dependencies
+from services import Metadata_tagging as meta_service
+
+router = APIRouter(prefix="/metadata", tags=["metadata"])
+
+
+@router.post("/extract-text/{engine_id}")
+def run_text_extraction(
+    engine_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """Trigger background text extraction for files with empty raw_text."""
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    current_status = meta_service.get_extraction_status(engine_id)
+    if current_status["status"] == "running":
+        return {"message": "Text extraction already in progress", "status": "running"}
+
+    # Use a new DB session inside the background task (sessions aren't thread-safe)
+    def run_task():
+        bg_db = next(database.get_db())
+        try:
+            meta_service.perform_text_extraction(engine_id, bg_db)
+        finally:
+            bg_db.close()
+
+    background_tasks.add_task(run_task)
+    return {"message": "Text extraction started", "status": "running"}
+
+
+@router.get("/extract-text/status/{engine_id}")
+def get_extraction_status(
+    engine_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """Returns current extraction job status: idle | running | done | error"""
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    status = meta_service.get_extraction_status(engine_id)
+    return status
+
+
+@router.get("/stats/{engine_id}")
+def get_engine_file_stats(
+    engine_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """Returns file statistics for the engine from segregation_results."""
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    from sqlalchemy import func, and_, or_
+
+    MEDIA_EXTENSIONS = [".mp4", ".png", ".jpeg", ".jpg", ".tif", ".heic", ".bmp"]
+
+    # Total files in segregation results
+    total_files = (
+        db.query(func.count(models.SegregationResult.id))
+        .filter(models.SegregationResult.engine_id == engine_id)
+        .scalar()
+    )
+
+    # PDF files (filename ends with .pdf, case-insensitive)
+    total_pdf_files = (
+        db.query(func.count(models.SegregationResult.id))
+        .filter(
+            models.SegregationResult.engine_id == engine_id,
+            func.lower(models.SegregationResult.box_file_name).like("%.pdf"),
+        )
+        .scalar()
+    )
+
+    # Media files (filename ends with any media extension)
+    media_conditions = [
+        func.lower(models.SegregationResult.box_file_name).like(f"%{ext}")
+        for ext in MEDIA_EXTENSIONS
+    ]
+    media_files = (
+        db.query(func.count(models.SegregationResult.id))
+        .filter(
+            models.SegregationResult.engine_id == engine_id,
+            or_(*media_conditions),
+        )
+        .scalar()
+    )
+
+    # Other files = total - pdf - media
+    other_files = total_files - total_pdf_files - media_files
+
+    # PDFs with extracted raw text (PDF file AND raw_text is not null/empty)
+    pdfs_with_text = (
+        db.query(func.count(models.SegregationResult.id))
+        .filter(
+            models.SegregationResult.engine_id == engine_id,
+            func.lower(models.SegregationResult.box_file_name).like("%.pdf"),
+            models.SegregationResult.raw_text != None,
+            models.SegregationResult.raw_text != "",
+        )
+        .scalar()
+    )
+
+    return {
+        "total_files": total_files,
+        "total_pdf_files": total_pdf_files,
+        "media_files": media_files,
+        "other_files": other_files,
+        "pdfs_with_text": pdfs_with_text,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# METADATA TAGGING ENDPOINTS
+# ─────────────────────────────────────────────────────────────
+
+@router.post("/tag/{engine_id}")
+def start_metadata_tagging(
+    engine_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """Start background Gemini metadata tagging for eligible segregation result rows."""
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    current_status = meta_service.get_tagging_status(engine_id)
+    if current_status["status"] == "running":
+        return {"message": "Metadata tagging already in progress", "status": "running"}
+
+    def run_task():
+        bg_db = next(database.get_db())
+        try:
+            meta_service.perform_metadata_tagging(engine_id, bg_db)
+        finally:
+            bg_db.close()
+
+    background_tasks.add_task(run_task)
+    return {"message": "Metadata tagging started", "status": "running"}
+
+
+@router.get("/tag/status/{engine_id}")
+def get_tagging_status(
+    engine_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """Returns current metadata-tagging job status: idle | running | done | error"""
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    status = meta_service.get_tagging_status(engine_id)
+    return status
