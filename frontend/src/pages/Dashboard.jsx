@@ -14,6 +14,10 @@ export default function Dashboard() {
     const [isUploading, setIsUploading] = useState(false);
     const [uploadComplete, setUploadComplete] = useState(false);
     const [uploadedEngineSerial, setUploadedEngineSerial] = useState('');
+    const [uploadFilesCompleted, setUploadFilesCompleted] = useState(0);
+    const [uploadFilesTotal, setUploadFilesTotal] = useState(0);
+    const [uploadErrors, setUploadErrors] = useState([]);
+    const [uploadSummary, setUploadSummary] = useState(null); // { serial, succeeded, total, errors }
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [engineToDelete, setEngineToDelete] = useState(null);
@@ -40,11 +44,17 @@ export default function Dashboard() {
         setIsUploading(true);
         setUploadProgress(0);
         setUploadComplete(false);
+        setUploadSummary(null);
+        setUploadErrors([]);
+        setUploadFilesCompleted(0);
+        setUploadFilesTotal(0);
         setUploadedEngineSerial(serialNumber);
         setUploadStage('Uploading files to server...');
 
-        const currentSerial = serialNumber; // Keep reference
+        const currentSerial = serialNumber;
         let phase1Done = false;
+        // Declare OUTSIDE try so catch can always clear it
+        let pollInterval = null;
 
         try {
             const formData = new FormData();
@@ -56,55 +66,74 @@ export default function Dashboard() {
                 }
             }
 
-            // Close modal and show progress
             setShowAddModal(false);
 
-            // 1. Start Polling Immediately (for phase 2 tracking)
-            const pollInterval = setInterval(async () => {
+            // 1. Start Polling for Box phase-2 progress
+            pollInterval = setInterval(async () => {
                 try {
-                    // Use encoded serial number for the URL
                     const encodedSN = encodeURIComponent(currentSerial);
                     const statusRes = await api.get(`/engines/upload-status/${encodedSN}`);
-                    const serverProgress = statusRes.data.progress; // 0 to 100
+                    const d = statusRes.data;
+                    const serverProgress = d.progress ?? 0;
 
-                    if (phase1Done || serverProgress > 0) {
-                        setUploadStage('Uploading your files...');
-                        // Phase 2: Map 0-100 server progress to 30%-100% of the bar
-                        const totalProgress = 30 + (serverProgress * 0.7);
-                        setUploadProgress(Math.round(totalProgress));
-
-                        if (serverProgress >= 100) {
-                            clearInterval(pollInterval);
-                            setUploadComplete(true);
-                            setUploadedEngineSerial(currentSerial);
-                            setTimeout(() => setUploadComplete(false), 5000);
-                            fetchEngines();
-                            setIsUploading(false);
-                            setUploadStage('');
-                        }
+                    // Update UI whenever phase1 done OR box upload is running/progressing
+                    if (phase1Done || serverProgress > 0 || d.status === 'running') {
+                        setUploadStage('Uploading your files to Box...');
+                        setUploadProgress(Math.round(30 + (serverProgress * 0.7)));
+                        setUploadFilesCompleted(d.completed ?? 0);
+                        setUploadFilesTotal(d.total ?? 0);
+                        setUploadErrors(d.errors ?? []);
                     }
-                } catch (err) {
-                    console.error("Polling error:", err);
+
+                    // Terminal — always stop polling
+                    if (d.status === 'done' || d.status === 'error' || serverProgress >= 100) {
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                        const succeeded = (d.total ?? 0) - (d.errors?.length ?? 0);
+                        setUploadSummary({
+                            serial: currentSerial,
+                            succeeded,
+                            total: d.total ?? 0,
+                            errors: d.errors ?? [],
+                            isError: d.status === 'error',
+                        });
+                        setUploadComplete(true);
+                        setUploadedEngineSerial(currentSerial);
+                        setTimeout(() => setUploadComplete(false), 12000);
+                        fetchEngines();
+                        setIsUploading(false);
+                        setUploadStage('');
+                    }
+                } catch (pollErr) {
+                    console.error('Polling error:', pollErr);
                 }
             }, 1000);
 
-            // 2. Trigger the upload (Phase 1 tracking)
+            // 2. Browser → server upload (phase 1)
             await api.post('/engines/', formData, {
                 onUploadProgress: (progressEvent) => {
-                    const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                    // Phase 1: Map 0-100 browser progress to 0%-30% of the bar
-                    if (!phase1Done) {
-                        setUploadProgress(Math.round(percentCompleted * 0.3));
-                    }
+                    const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                    if (!phase1Done) setUploadProgress(Math.round(pct * 0.3));
                 }
             });
 
-            phase1Done = true; // Mark Phase 1 as officially complete
+            phase1Done = true;
             setSerialNumber('');
             setSelectedFiles(null);
         } catch (err) {
-            console.error("Upload failed", err);
-            alert('Failed to add engine. Check console for details.');
+            // ALWAYS clear interval on any failure to prevent infinite polling
+            if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+
+            const status = err?.response?.status;
+            const detail = err?.response?.data?.detail || '';
+
+            if (status === 400 && detail.toLowerCase().includes('already exists')) {
+                alert(`Engine "${currentSerial}" already exists. Please use a different serial number.`);
+            } else {
+                console.error('Upload failed', err);
+                alert(detail || 'Failed to add engine. Check console for details.');
+            }
+
             setIsUploading(false);
             setUploadProgress(0);
             setUploadStage('');
@@ -179,7 +208,7 @@ export default function Dashboard() {
                     <SidebarItem icon={HardDrive} label="My Storage" count={engines.length} />
                     <SidebarItem icon={Clock} label="Recent Files" />
                     <SidebarItem icon={Star} label="Favorites" />
-                    
+
 
                     <div style={{ height: '24px' }}></div>
 
@@ -243,55 +272,94 @@ export default function Dashboard() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
                             <Plane size={32} style={{ animation: 'pulse 2s infinite' }} />
                             <div style={{ flex: 1 }}>
-                                <h3 style={{ margin: 0, marginBottom: '0.5rem', color: 'white' }}>
+                                <h3 style={{ margin: 0, marginBottom: '0.25rem', color: 'white' }}>
                                     {uploadStage || `Uploading Engine: ${uploadedEngineSerial}`}
                                 </h3>
                                 <p style={{ margin: 0, opacity: 0.9, fontSize: '0.9rem' }}>
-                                    Please wait while we upload your files...
+                                    {uploadFilesTotal > 0
+                                        ? `${uploadFilesCompleted} / ${uploadFilesTotal} files uploaded`
+                                        : 'Preparing upload...'}
                                 </p>
                             </div>
+                            <span style={{ fontSize: '1.1rem', fontWeight: 700 }}>{uploadProgress}%</span>
                         </div>
 
                         {/* Progress Bar */}
                         <div style={{
-                            width: '100%',
-                            height: '12px',
-                            background: 'rgba(255,255,255,0.2)',
-                            borderRadius: '10px',
-                            overflow: 'hidden',
-                            marginBottom: '0.5rem'
+                            width: '100%', height: '12px',
+                            background: 'rgba(255,255,255,0.2)', borderRadius: '10px', overflow: 'hidden',
+                            marginBottom: '0.75rem'
                         }}>
                             <div style={{
-                                width: `${uploadProgress}%`,
-                                height: '100%',
-                                background: 'white',
-                                borderRadius: '10px',
+                                width: `${uploadProgress}%`, height: '100%',
+                                background: 'white', borderRadius: '10px',
                                 transition: 'width 0.5s ease',
                                 boxShadow: '0 0 10px rgba(255,255,255,0.5)'
                             }} />
                         </div>
-                        <div style={{ textAlign: 'right', fontSize: '0.85rem', opacity: 0.9 }}>
-                            {uploadProgress}% Complete
-                        </div>
+
+                        {/* Live error list */}
+                        {uploadErrors.length > 0 && (
+                            <div style={{
+                                background: 'rgba(0,0,0,0.25)', borderRadius: '8px',
+                                padding: '0.75rem', marginTop: '0.5rem', maxHeight: '120px', overflowY: 'auto'
+                            }}>
+                                <p style={{ margin: '0 0 0.4rem', fontWeight: 600, fontSize: '0.85rem' }}>
+                                    ⚠️ {uploadErrors.length} file{uploadErrors.length > 1 ? 's' : ''} skipped:
+                                </p>
+                                {uploadErrors.map((e, i) => (
+                                    <p key={i} style={{ margin: '2px 0', fontSize: '0.75rem', opacity: 0.85, wordBreak: 'break-all' }}>
+                                        • {e}
+                                    </p>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 )}
 
-                {/* Upload Complete Message */}
-                {uploadComplete && (
+                {/* Upload Summary / Complete Message */}
+                {uploadComplete && uploadSummary && (
                     <div className="glass-panel animate-fade-in" style={{
                         padding: '2rem',
                         marginBottom: '2rem',
-                        background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
-                        color: 'white',
-                        textAlign: 'center'
+                        background: uploadSummary.errors.length > 0
+                            ? 'linear-gradient(135deg, #f7971e 0%, #ffd200 100%)'
+                            : 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+                        color: uploadSummary.errors.length > 0 ? '#1a1a1a' : 'white',
                     }}>
-                        <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>✓</div>
-                        <h3 style={{ margin: 0, marginBottom: '0.5rem', fontSize: '1.5rem', color: 'white' }}>
-                            Upload Complete!
-                        </h3>
-                        <p style={{ margin: 0, fontSize: '1.1rem', opacity: 0.95 }}>
-                            Engine <strong>{uploadedEngineSerial}</strong> has been successfully uploaded to Box.
-                        </p>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                            <span style={{ fontSize: '2.5rem' }}>
+                                {uploadSummary.errors.length === 0 ? '✅' : '⚠️'}
+                            </span>
+                            <div>
+                                <h3 style={{ margin: 0, marginBottom: '0.25rem' }}>
+                                    {uploadSummary.errors.length === 0
+                                        ? 'Upload Complete!'
+                                        : 'Upload Finished with Skipped Files'}
+                                </h3>
+                                <p style={{ margin: 0, fontSize: '1rem' }}>
+                                    <strong>{uploadSummary.succeeded}</strong> of <strong>{uploadSummary.total}</strong> files
+                                    successfully uploaded for engine <strong>{uploadSummary.serial}</strong>.
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Skipped files list */}
+                        {uploadSummary.errors.length > 0 && (
+                            <div style={{
+                                background: 'rgba(0,0,0,0.1)', borderRadius: '8px',
+                                padding: '0.75rem', maxHeight: '180px', overflowY: 'auto'
+                            }}>
+                                <p style={{ margin: '0 0 0.5rem', fontWeight: 600, fontSize: '0.9rem' }}>
+                                    {uploadSummary.errors.length} file{uploadSummary.errors.length > 1 ? 's' : ''} skipped:
+                                </p>
+                                {uploadSummary.errors.map((e, i) => (
+                                    <p key={i} style={{ margin: '3px 0', fontSize: '0.78rem', wordBreak: 'break-all' }}>
+                                        • {e}
+                                    </p>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 )}
 

@@ -19,30 +19,42 @@ def read_engines(skip: int = 0, limit: int = 100, db: Session = Depends(database
     return engines
 
 # In-memory storage for upload progress
-# Key: serial_number, Value: percentage (int)
+# Key: serial_number, Value: { status, progress, completed, total, errors }
 upload_progress = {}
 
 @router.get("/upload-status/{serial_number}")
 async def get_upload_status(serial_number: str):
     """Get the current upload progress for a specific engine"""
-    progress = upload_progress.get(serial_number, 0)
-    return {"progress": progress}
+    status_obj = upload_progress.get(serial_number, {
+        "status": "idle",
+        "progress": 0,
+        "completed": 0,
+        "total": 0,
+        "errors": []
+    })
+    return status_obj
 
 def perform_box_upload(serial_number: str, model_name: str, upload_path: str, engine_id: int, db_session_factory, company_name: str = None):
-    """Background task to handle Box upload and progress updates (Sync to avoid event loop block)"""
+    """Background task: upload to Box with per-file error handling and rich progress updates."""
     try:
-        def update_progress(percentage):
-            upload_progress[serial_number] = percentage
-            print(f"Upload progress for {serial_number}: {percentage}%")
+        def update_progress(percentage, state=None):
+            upload_progress[serial_number] = {
+                "status": "running",
+                "progress": percentage,
+                "completed": state["current"] if state else 0,
+                "total":     state["total"]   if state else 0,
+                "errors":    list(state["errors"]) if state else [],
+            }
+            print(f"Upload progress for {serial_number}: {percentage}% ({(state or {}).get('current',0)}/{(state or {}).get('total',0)})")
 
         folder_name = f"{serial_number}"
-        uploaded_folder = box_service.create_and_upload_engine_folder(
-            folder_name, 
-            upload_path, 
+        uploaded_folder, errors = box_service.create_and_upload_engine_folder(
+            folder_name,
+            upload_path,
             progress_callback=update_progress,
             company_name=company_name
         )
-        
+
         if uploaded_folder:
             # Update database with Box Folder ID
             db = db_session_factory()
@@ -53,17 +65,29 @@ def perform_box_upload(serial_number: str, model_name: str, upload_path: str, en
                     db.commit()
             finally:
                 db.close()
-                
+
+        # Mark as done (even if some files had errors — upload itself finished)
+        prev = upload_progress.get(serial_number, {})
+        upload_progress[serial_number] = {
+            **prev,
+            "status":   "done",
+            "progress": 100,
+            "errors":   errors,
+        }
+
     except Exception as e:
         print(f"Error in background Box upload: {e}")
+        prev = upload_progress.get(serial_number, {})
+        upload_progress[serial_number] = {
+            **prev,
+            "status":   "error",
+            "errors":   prev.get("errors", []) + [f"Fatal upload error: {e}"],
+        }
     finally:
         # Cleanup Temp Dir
         if upload_path and os.path.exists(upload_path) and "temp" in upload_path:
             shutil.rmtree(upload_path)
             print(f"Cleaned up temp directory: {upload_path}")
-        
-        # Keep progress at 100 for a while or remove it? 
-        # For now, let's keep it so the frontend can see '100' once.
 
 @router.post("/", response_model=schemas.Engine)
 async def create_engine(
@@ -89,24 +113,30 @@ async def create_engine(
         print(f"Receiving {len(files)} files from browser upload...")
         temp_dir = tempfile.mkdtemp(prefix=f"engine_{serial_number}_")
         upload_path = temp_dir
-        
+
         for file in files:
-            relative_path = file.filename.replace('\\', '/')
-            safe_relative_path = os.path.normpath(relative_path).lstrip(os.sep).lstrip('/')
-            
-            # Simple stripping of first folder if it exists (common with webkitdirectory)
-            parts = safe_relative_path.split(os.sep)
-            if len(parts) > 1:
-                path_without_base = os.path.join(*parts[1:])
-            else:
-                path_without_base = safe_relative_path
-            
-            file_destination = os.path.join(temp_dir, path_without_base)
-            os.makedirs(os.path.dirname(file_destination), exist_ok=True)
-            
-            with open(file_destination, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-        
+            try:
+                relative_path = file.filename.replace('\\', '/')
+                safe_relative_path = os.path.normpath(relative_path).lstrip(os.sep).lstrip('/')
+
+                # Strip the root folder name (common with webkitdirectory uploads)
+                parts = safe_relative_path.split(os.sep)
+                path_without_base = os.path.join(*parts[1:]) if len(parts) > 1 else parts[0]
+
+                file_destination = os.path.join(temp_dir, path_without_base)
+
+                # Guard: only create parent dir if it is not the temp_dir itself
+                parent_dir = os.path.dirname(file_destination)
+                if parent_dir and parent_dir != temp_dir:
+                    os.makedirs(parent_dir, exist_ok=True)
+
+                with open(file_destination, "wb") as buffer:
+                    shutil.copyfileobj(file.file, buffer)
+
+            except Exception as file_err:
+                print(f"[create_engine] Skipping file {file.filename}: {file_err}")
+                continue
+
         print(f"Saved uploaded files to {temp_dir}")
 
     # Create engine in DB first (without Box ID yet)
@@ -125,7 +155,13 @@ async def create_engine(
 
     # Start Background Upload to Box
     if upload_path:
-        upload_progress[serial_number] = 0
+        upload_progress[serial_number] = {
+            "status": "running",
+            "progress": 0,
+            "completed": 0,
+            "total": 0,
+            "errors": []
+        }
         background_tasks.add_task(
             perform_box_upload, 
             serial_number, 

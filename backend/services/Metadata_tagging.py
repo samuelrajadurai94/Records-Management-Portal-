@@ -344,7 +344,7 @@ def process_single_pdf_to_json(pdf_path: str, schema_cls) -> dict:
     """
     return build_empty_model(schema_cls).model_dump(exclude_none=False)
 
-
+#"12. Manufacturer delivery docs"
 # ─────────────────────────────────────────────────────────────
 # SCHEMA MAPPING: category → Pydantic schema
 # ─────────────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ Pydantic_Schema_mapping_dict = {
     '1. Certified statement of total time in service (Hrs & Cycles)': Hours_Cycles_Statement_listData,
     '11. ETOPs compliance report':                ETOPS_Statement_listData,
     '22. SB':                                     SBStatus_Statement_listData,
-    '12. Manufacturer delivery docs':             ManufacturerDelivery_listData,
+    '12. Manufacturer Delivery Docs':             ManufacturerDelivery_listData,
     '13. Logbook & Install-Removal History':      InstallRemovalStatement_listData,
     '15. Engine Last Release Certificate':        ARC_Statement_listData,
     '16. Last Borescope Inspection':              BSI_Report_listData,
@@ -555,3 +555,176 @@ def process_single_file(result_id: int, db: Session) -> dict:
     }
 
 
+# ─────────────────────────────────────────────────────────────
+# FULL PIPELINE: Combined text extraction + metadata tagging
+# SQL migration:
+#   ALTER TABLE segregation_results ADD COLUMN IF NOT EXISTS meta_data_status VARCHAR(500) DEFAULT '';
+# ─────────────────────────────────────────────────────────────
+_pipeline_status: dict[int, dict] = {}
+_pipeline_lock = threading.Lock()
+
+
+def get_pipeline_status(engine_id: int) -> dict:
+    return _pipeline_status.get(engine_id, {
+        "status": "idle", "total": 0, "completed": 0,
+        "extracted": 0, "tagged": 0, "skipped": 0, "errors": 0, "error": None
+    })
+
+
+def perform_full_pipeline(engine_id: int, db: Session):
+    """
+    Single-button full pipeline for an entire engine:
+      For every SegregationResult PDF row where category NOT in excluded_categories:
+        1. If raw_text empty → extract text from Box
+        2. If category in Pydantic_Schema_mapping_dict → call Gemini → save metadata_json
+        3. On any error → skip and write error to meta_data_status
+    """
+    from sqlalchemy import func as sa_func, String as sa_String, or_
+
+    with _pipeline_lock:
+        _pipeline_status[engine_id] = {
+            "status": "running", "total": 0, "completed": 0,
+            "extracted": 0, "tagged": 0, "skipped": 0, "errors": 0, "error": None
+        }
+
+    try:
+        rows = (
+            db.query(models.SegregationResult)
+            .filter(
+                models.SegregationResult.engine_id == engine_id,
+                sa_func.lower(models.SegregationResult.box_file_name).like("%.pdf"),
+                ~models.SegregationResult.category.in_(excluded_categories),
+                # Skip rows already fully tagged (metadata_json non-empty dict)
+                # This makes re-runs safe and avoids wasting Gemini API calls
+                or_(
+                    models.SegregationResult.metadata_json == None,
+                    sa_func.cast(models.SegregationResult.metadata_json, sa_String) == "{}",
+                ),
+            )
+            .all()
+        )
+
+        total = len(rows)
+        print(f"[FullPipeline] Engine {engine_id}: {total} eligible PDF rows")
+
+        with _pipeline_lock:
+            _pipeline_status[engine_id]["total"] = total
+
+        if total == 0:
+            with _pipeline_lock:
+                _pipeline_status[engine_id]["status"] = "done"
+            return
+
+        def _process_row(row_id, box_file_id, box_file_name, category, raw_text):
+            res = {
+                "row_id": row_id, "raw_text": raw_text,
+                "text_extraction_status": None, "metadata_json": None,
+                "meta_data_status": "ok", "did_extract": False,
+                "did_tag": False, "is_error": False,
+            }
+            # Step 1: extract text if missing
+            if not raw_text or raw_text.strip() == "":
+                try:
+                    ext = _extract_single_file(row_id, box_file_id, box_file_name)
+                    res["raw_text"] = ext.get("raw_text", "")
+                    res["text_extraction_status"] = ext.get("text_extraction_status", "")
+                    res["did_extract"] = True
+                    if not res["raw_text"] or not res["raw_text"].strip():
+                        res["meta_data_status"] = f"No readable text: {ext.get('text_extraction_status','')}"
+                        return res
+                except Exception as e:
+                    res["meta_data_status"] = f"Extraction error: {e}"
+                    res["is_error"] = True
+                    return res
+
+            # Step 2: tag if schema available
+            if category in Pydantic_Schema_mapping_dict and res["raw_text"] and res["raw_text"].strip():
+                schema_cls = Pydantic_Schema_mapping_dict[category]
+                try:
+                    tag = _tag_single_row(row_id, res["raw_text"], schema_cls)
+                    if tag.get("error"):
+                        res["meta_data_status"] = f"Gemini error: {tag['error']}"
+                        res["is_error"] = True
+                    else:
+                        res["metadata_json"] = tag["metadata_json"]
+                        res["did_tag"] = True
+                        res["meta_data_status"] = "ok"
+                except Exception as e:
+                    res["meta_data_status"] = f"Tagging error: {e}"
+                    res["is_error"] = True
+            elif category not in Pydantic_Schema_mapping_dict:
+                res["meta_data_status"] = "skipped: no schema for category"
+
+            return res
+
+        work_items = [
+            (r.id, r.box_file_id, r.box_file_name, r.category, r.raw_text)
+            for r in rows
+        ]
+
+        _db_write_lock = threading.Lock()
+        completed = extracted = tagged = skipped = errors = 0
+
+        with ThreadPoolExecutor(max_workers=META_WORKERS) as executor:
+            future_map = {
+                executor.submit(_process_row, rid, bfid, bfname, cat, txt): rid
+                for rid, bfid, bfname, cat, txt in work_items
+            }
+
+            for future in as_completed(future_map):
+                rid = future_map[future]
+                try:
+                    res = future.result()
+                except Exception as e:
+                    res = {
+                        "row_id": rid, "raw_text": None, "text_extraction_status": None,
+                        "metadata_json": None, "meta_data_status": f"Thread error: {e}",
+                        "did_extract": False, "did_tag": False, "is_error": True,
+                    }
+
+                with _db_write_lock:
+                    try:
+                        row = db.query(models.SegregationResult).filter(
+                            models.SegregationResult.id == res["row_id"]
+                        ).first()
+                        if row:
+                            if res["did_extract"]:
+                                row.raw_text = res["raw_text"] or ""
+                                row.text_extraction_status = res["text_extraction_status"] or ""
+                            if res["did_tag"] and res["metadata_json"] is not None:
+                                row.metadata_json = res["metadata_json"]
+                            row.meta_data_status = res["meta_data_status"]
+                            db.commit()
+                    except Exception as db_err:
+                        db.rollback()
+                        print(f"[FullPipeline] DB write failed row {rid}: {db_err}")
+
+                completed += 1
+                if res["did_extract"]: extracted += 1
+                if res["did_tag"]: tagged += 1
+                if "skipped" in res["meta_data_status"]: skipped += 1
+                if res["is_error"]: errors += 1
+
+                with _pipeline_lock:
+                    _pipeline_status[engine_id].update({
+                        "completed": completed, "extracted": extracted,
+                        "tagged": tagged, "skipped": skipped, "errors": errors
+                    })
+
+                if completed % 5 == 0 or completed == total:
+                    print(f"[FullPipeline] Engine {engine_id}: {completed}/{total} "
+                          f"(extracted={extracted}, tagged={tagged}, errors={errors})")
+
+        print(f"[FullPipeline] Engine {engine_id}: ✔ Done — tagged={tagged}, errors={errors}")
+        with _pipeline_lock:
+            _pipeline_status[engine_id].update({
+                "status": "done", "total": total, "completed": total,
+                "extracted": extracted, "tagged": tagged, "skipped": skipped, "errors": errors
+            })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        with _pipeline_lock:
+            _pipeline_status[engine_id].update({"status": "error", "error": str(e)})
+        print(f"[FullPipeline] Engine {engine_id} FAILED: {e}")

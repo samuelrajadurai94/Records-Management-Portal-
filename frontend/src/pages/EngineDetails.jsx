@@ -63,16 +63,13 @@ export default function EngineDetails() {
     const [segPollInterval, setSegPollInterval] = useState(null);
 
     // Metadata Extraction state
-    const [extractionStatus, setExtractionStatus] = useState('idle'); // idle|running|done|error|all_done
-    const [extractionProgress, setExtractionProgress] = useState({ total: 0, completed: 0 });
-    const [extractionPollInterval, setExtractionPollInterval] = useState(null);
     const [fileStats, setFileStats] = useState(null);
 
-    // Metadata Tagging state
-    const [taggingStatus, setTaggingStatus] = useState('idle'); // idle|running|done|error
-    const [taggingProgress, setTaggingProgress] = useState({ total: 0, completed: 0 });
-    const [taggingPollInterval, setTaggingPollInterval] = useState(null);
-    const [taggingError, setTaggingError] = useState(null);
+    // Single full-pipeline state (replaces separate extraction + tagging states)
+    const [pipelineStatus, setPipelineStatus] = useState('idle'); // idle|running|done|error
+    const [pipelineProgress, setPipelineProgress] = useState({ total: 0, completed: 0, extracted: 0, tagged: 0, skipped: 0, errors: 0 });
+    const [pipelinePollInterval, setPipelinePollInterval] = useState(null);
+    const [pipelineError, setPipelineError] = useState(null);
 
     // Metadata Viewer state (META DATA TAGGING tab sidebar + panel)
     const [metaFiles, setMetaFiles] = useState([]);
@@ -89,14 +86,10 @@ export default function EngineDetails() {
             const res = await api.get(`/metadata/stats/${id}`);
             const stats = res.data;
             setFileStats(stats);
-            // Auto-detect if all PDFs already have text
-            if (stats.total_pdf_files > 0 && stats.pdfs_with_text >= stats.total_pdf_files && extractionStatus === 'idle') {
-                setExtractionStatus('all_done');
-            }
         } catch (err) {
             console.error('Failed to fetch file stats:', err);
         }
-    }, [id, extractionStatus]);
+    }, [id]);
 
     // Fetch all files with metadata_json for the sidebar viewer
     const fetchMetaFiles = useCallback(async () => {
@@ -116,40 +109,48 @@ export default function EngineDetails() {
         }
     }, [activeTab, fetchFileStats, fetchMetaFiles]);
 
-    // ── Start Metadata Tagging ──────────────────────────────────────────────
-    const startMetadataTagging = useCallback(async () => {
-        setTaggingError(null);
-        setTaggingStatus('running');
-        setTaggingProgress({ total: 0, completed: 0 });
+    // ── Start Full Pipeline (single-button: extract + tag for entire engine) ──
+    const startFullPipeline = useCallback(async () => {
+        setPipelineError(null);
+        setPipelineStatus('running');
+        setPipelineProgress({ total: 0, completed: 0, extracted: 0, tagged: 0, skipped: 0, errors: 0 });
         try {
-            await api.post(`/metadata/tag/${id}`);
+            await api.post(`/metadata/pipeline/${id}`);
             const interval = setInterval(async () => {
                 try {
-                    const res = await api.get(`/metadata/tag/status/${id}`);
+                    const res = await api.get(`/metadata/pipeline/status/${id}`);
                     const data = res.data;
-                    setTaggingProgress({ total: data.total, completed: data.completed });
+                    setPipelineProgress({
+                        total: data.total,
+                        completed: data.completed,
+                        extracted: data.extracted ?? 0,
+                        tagged: data.tagged ?? 0,
+                        skipped: data.skipped ?? 0,
+                        errors: data.errors ?? 0,
+                    });
                     if (data.status === 'done') {
                         clearInterval(interval);
-                        setTaggingPollInterval(null);
-                        setTaggingStatus('done');
-                        fetchMetaFiles(); // ← refresh sidebar after tagging completes
+                        setPipelinePollInterval(null);
+                        setPipelineStatus('done');
+                        fetchFileStats();
+                        fetchMetaFiles();
                     } else if (data.status === 'error') {
                         clearInterval(interval);
-                        setTaggingPollInterval(null);
-                        setTaggingStatus('error');
-                        setTaggingError(data.error || 'Metadata tagging failed. Check server logs.');
+                        setPipelinePollInterval(null);
+                        setPipelineStatus('error');
+                        setPipelineError(data.error || 'Pipeline failed. Check server logs.');
                     }
                 } catch (pollErr) {
-                    console.error('Tagging poll error:', pollErr);
+                    console.error('Pipeline poll error:', pollErr);
                 }
             }, 3000);
-            setTaggingPollInterval(interval);
+            setPipelinePollInterval(interval);
         } catch (err) {
-            console.error('Failed to start tagging:', err);
-            setTaggingStatus('error');
-            setTaggingError(err?.response?.data?.detail || 'Failed to start metadata tagging.');
+            console.error('Failed to start pipeline:', err);
+            setPipelineStatus('error');
+            setPipelineError(err?.response?.data?.detail || 'Failed to start pipeline.');
         }
-    }, [id, fetchMetaFiles]);
+    }, [id, fetchMetaFiles, fetchFileStats]);
 
     // ── Fetch engine + Box structure ─────────────────────────────────────
     const fetchEngineData = useCallback(async () => {
@@ -1675,120 +1676,67 @@ export default function EngineDetails() {
             {/* ── META DATA TAGGING TAB ── */}
             {activeTab === 'META DATA TAGGING' && (
                 <div style={{ display: 'flex', flex: 1, overflow: 'hidden', flexDirection: 'column' }}>
-                    {/* Top action bar */}
+                    {/* Top action bar — single unified pipeline button */}
                     <div style={{
                         background: 'white', borderBottom: '1px solid #edf2f7',
-                        padding: '0.6rem 1rem', display: 'flex', alignItems: 'center', gap: '14px'
+                        padding: '0.6rem 1rem', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap'
                     }}>
                         <button
-                            onClick={async () => {
-                                try {
-                                    const statsRes = await api.get(`/metadata/stats/${id}`);
-                                    const stats = statsRes.data;
-                                    setFileStats(stats);
-                                    const remaining = stats.total_pdf_files - stats.pdfs_with_text;
-                                    if (remaining <= 0) {
-                                        setExtractionStatus('all_done');
-                                        return;
-                                    }
-                                    setExtractionStatus('running');
-                                    setExtractionProgress({ total: remaining, completed: 0 });
-                                    await api.post(`/metadata/extract-text/${id}`);
-                                    const interval = setInterval(async () => {
-                                        try {
-                                            const res = await api.get(`/metadata/extract-text/status/${id}`);
-                                            const data = res.data;
-                                            setExtractionProgress({ total: data.total, completed: data.completed });
-                                            if (data.status === 'done' || data.status === 'error') {
-                                                clearInterval(interval);
-                                                setExtractionPollInterval(null);
-                                                setExtractionStatus(data.status);
-                                                fetchFileStats();
-                                            }
-                                        } catch (err) { console.error('Poll error:', err); }
-                                    }, 3000);
-                                    setExtractionPollInterval(interval);
-                                } catch (err) {
-                                    console.error('Failed to start extraction:', err);
-                                    setExtractionStatus('error');
-                                }
-                            }}
-                            disabled={extractionStatus === 'running'}
+                            id="start-pipeline-btn"
+                            onClick={startFullPipeline}
+                            disabled={pipelineStatus === 'running'}
                             style={{
                                 display: 'flex', alignItems: 'center', gap: '8px',
-                                padding: '8px 20px', borderRadius: '8px', border: 'none',
-                                background: extractionStatus === 'running' ? '#94a3b8' : 'linear-gradient(135deg, #7c3aed, #a855f7)',
-                                color: 'white', fontWeight: 700, fontSize: '0.82rem',
-                                cursor: extractionStatus === 'running' ? 'not-allowed' : 'pointer',
-                                boxShadow: '0 2px 8px rgba(124,58,237,0.3)', transition: 'all 0.2s'
+                                padding: '8px 22px', borderRadius: '8px', border: 'none',
+                                background: pipelineStatus === 'running'
+                                    ? '#94a3b8'
+                                    : 'linear-gradient(135deg, #7c3aed, #0ea5e9)',
+                                color: 'white', fontWeight: 700, fontSize: '0.85rem',
+                                cursor: pipelineStatus === 'running' ? 'not-allowed' : 'pointer',
+                                boxShadow: '0 2px 10px rgba(99,102,241,0.35)', transition: 'all 0.2s'
                             }}
-                            onMouseEnter={(e) => { if (extractionStatus !== 'running') e.currentTarget.style.opacity = '0.9'; }}
+                            onMouseEnter={(e) => { if (pipelineStatus !== 'running') e.currentTarget.style.opacity = '0.88'; }}
                             onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
                         >
-                            {extractionStatus === 'running' ? <Loader size={15} className="spinner" /> : <FileText size={15} />}
-                            {extractionStatus === 'running' ? 'Extracting Text...' : '📝 Text Extraction'}
+                            {pipelineStatus === 'running'
+                                ? <Loader size={15} className="spinner" />
+                                : <span style={{ fontSize: '15px' }}>🤖</span>}
+                            {pipelineStatus === 'running'
+                                ? `Processing… ${pipelineProgress.completed}/${pipelineProgress.total}`
+                                : 'Meta Data Tagging — Entire Engine'}
                         </button>
 
-                        {/* Extraction status badge */}
-                        {extractionStatus === 'running' && (
-                            <span style={{ fontSize: '0.78rem', color: '#7c3aed', fontWeight: 600, background: '#ede9fe', padding: '4px 12px', borderRadius: '100px' }}>
-                                ⏳ {extractionProgress.completed} / {extractionProgress.total} files
-                            </span>
+                        {/* Pipeline progress badges */}
+                        {pipelineStatus === 'running' && (
+                            <>
+                                <span style={{ fontSize: '0.77rem', color: '#7c3aed', fontWeight: 600, background: '#ede9fe', padding: '4px 12px', borderRadius: '100px' }}>
+                                    📄 Extracted: {pipelineProgress.extracted}
+                                </span>
+                                <span style={{ fontSize: '0.77rem', color: '#0369a1', fontWeight: 600, background: '#e0f2fe', padding: '4px 12px', borderRadius: '100px' }}>
+                                    🏷️ Tagged: {pipelineProgress.tagged}
+                                </span>
+                                {pipelineProgress.errors > 0 && (
+                                    <span style={{ fontSize: '0.77rem', color: '#dc2626', fontWeight: 600, background: '#fef2f2', padding: '4px 12px', borderRadius: '100px' }}>
+                                        ❌ Errors: {pipelineProgress.errors}
+                                    </span>
+                                )}
+                            </>
                         )}
-                        {extractionStatus === 'done' && (
+                        {pipelineStatus === 'done' && (
                             <span style={{ fontSize: '0.78rem', color: '#16a34a', fontWeight: 600, background: '#dcfce7', padding: '4px 12px', borderRadius: '100px' }}>
-                                ✅ Extraction Complete — {extractionProgress.total} files
+                                ✅ Done — {pipelineProgress.tagged} tagged, {pipelineProgress.extracted} extracted
+                                {pipelineProgress.errors > 0 ? `, ${pipelineProgress.errors} errors` : ''}
                             </span>
                         )}
-                        {extractionStatus === 'error' && (
+                        {pipelineStatus === 'error' && (
                             <span style={{ fontSize: '0.78rem', color: '#dc2626', fontWeight: 600, background: '#fef2f2', padding: '4px 12px', borderRadius: '100px' }}>
-                                ❌ Extraction Failed
-                            </span>
-                        )}
-
-                        {/* Divider */}
-                        <div style={{ width: '1px', height: '28px', background: '#e2e8f0', margin: '0 4px' }} />
-
-                        {/* ── Start Metadata Tagging Button ── */}
-                        <button
-                            id="start-metadata-tagging-btn"
-                            onClick={startMetadataTagging}
-                            disabled={taggingStatus === 'running'}
-                            style={{
-                                display: 'flex', alignItems: 'center', gap: '8px',
-                                padding: '8px 20px', borderRadius: '8px', border: 'none',
-                                background: taggingStatus === 'running' ? '#94a3b8' : 'linear-gradient(135deg, #0ea5e9, #6366f1)',
-                                color: 'white', fontWeight: 700, fontSize: '0.82rem',
-                                cursor: taggingStatus === 'running' ? 'not-allowed' : 'pointer',
-                                boxShadow: '0 2px 8px rgba(99,102,241,0.3)', transition: 'all 0.2s'
-                            }}
-                            onMouseEnter={(e) => { if (taggingStatus !== 'running') e.currentTarget.style.opacity = '0.88'; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
-                        >
-                            {taggingStatus === 'running' ? <Loader size={15} className="spinner" /> : <span style={{ fontSize: '15px' }}>🤖</span>}
-                            {taggingStatus === 'running' ? 'Tagging...' : 'Start Metadata Tagging'}
-                        </button>
-
-                        {/* Tagging status badge */}
-                        {taggingStatus === 'running' && (
-                            <span style={{ fontSize: '0.78rem', color: '#6366f1', fontWeight: 600, background: '#eef2ff', padding: '4px 12px', borderRadius: '100px' }}>
-                                🤖 {taggingProgress.completed} / {taggingProgress.total} tagged
-                            </span>
-                        )}
-                        {taggingStatus === 'done' && (
-                            <span style={{ fontSize: '0.78rem', color: '#16a34a', fontWeight: 600, background: '#dcfce7', padding: '4px 12px', borderRadius: '100px' }}>
-                                ✅ Tagging Complete — {taggingProgress.total} files
-                            </span>
-                        )}
-                        {taggingStatus === 'error' && (
-                            <span style={{ fontSize: '0.78rem', color: '#dc2626', fontWeight: 600, background: '#fef2f2', padding: '4px 12px', borderRadius: '100px' }}>
-                                ❌ Tagging Failed
+                                ❌ Pipeline Failed
                             </span>
                         )}
                     </div>
 
-                    {/* ── Tagging Error Toast ── */}
-                    {taggingStatus === 'error' && taggingError && (
+                    {/* ── Pipeline Error Toast ── */}
+                    {pipelineStatus === 'error' && pipelineError && (
                         <div style={{
                             position: 'fixed', bottom: '24px', right: '24px', zIndex: 9999,
                             background: '#fff', border: '1.5px solid #fca5a5', borderRadius: '12px',
@@ -1797,11 +1745,11 @@ export default function EngineDetails() {
                         }}>
                             <span style={{ fontSize: '1.4rem', flexShrink: 0 }}>❌</span>
                             <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: '4px', fontSize: '0.88rem' }}>Metadata Tagging Error</div>
-                                <div style={{ fontSize: '0.82rem', color: '#7f1d1d', lineHeight: 1.5 }}>{taggingError}</div>
+                                <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: '4px', fontSize: '0.88rem' }}>Metadata Pipeline Error</div>
+                                <div style={{ fontSize: '0.82rem', color: '#7f1d1d', lineHeight: 1.5 }}>{pipelineError}</div>
                             </div>
                             <button
-                                onClick={() => { setTaggingStatus('idle'); setTaggingError(null); }}
+                                onClick={() => { setPipelineStatus('idle'); setPipelineError(null); }}
                                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '1.1rem', paddingTop: '2px' }}
                             >✕</button>
                         </div>
@@ -1819,6 +1767,7 @@ export default function EngineDetails() {
                                 { label: 'Media Files', value: fileStats.media_files, icon: '🎥', color: '#ec4899', bg: '#fdf2f8' },
                                 { label: 'Other Files', value: fileStats.other_files, icon: '📎', color: '#f59e0b', bg: '#fffbeb' },
                                 { label: 'PDFs with Text', value: fileStats.pdfs_with_text, icon: '✅', color: '#16a34a', bg: '#f0fdf4' },
+                                { label: 'Tagged Files 🏷️', value: fileStats.files_with_tags ?? 0, icon: '🤖', color: '#0369a1', bg: '#e0f2fe' },
                             ].map(stat => (
                                 <div key={stat.label} style={{
                                     background: stat.bg, border: `1px solid ${stat.color}22`,

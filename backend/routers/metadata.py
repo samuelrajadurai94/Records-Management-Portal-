@@ -129,12 +129,27 @@ def get_engine_file_stats(
         .scalar()
     )
 
+    # PDFs with non-empty metadata_json (not null and not empty {})
+    from sqlalchemy import String as _String
+    files_with_tags = (
+        db.query(func.count(models.SegregationResult.id))
+        .filter(
+            models.SegregationResult.engine_id == engine_id,
+            func.lower(models.SegregationResult.box_file_name).like("%.pdf"),
+            models.SegregationResult.metadata_json.isnot(None),
+            func.cast(models.SegregationResult.metadata_json, _String) != "{}",
+        )
+        .scalar()
+    )
+
+
     return {
         "total_files": total_files,
         "total_pdf_files": total_pdf_files,
         "media_files": media_files,
         "other_files": other_files,
         "pdfs_with_text": pdfs_with_text,
+        "files_with_tags": files_with_tags,
     }
 
 
@@ -190,6 +205,66 @@ def get_tagging_status(
 
     status = meta_service.get_tagging_status(engine_id)
     return status
+
+
+# ─────────────────────────────────────────────────────────────
+# FULL PIPELINE ENDPOINTS (single-button: extract + tag)
+# ─────────────────────────────────────────────────────────────
+
+@router.post("/pipeline/{engine_id}")
+def start_full_pipeline(
+    engine_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Start the full metadata pipeline in background:
+      For every eligible PDF row (not in excluded categories):
+        1. Extract text if missing
+        2. Tag with Gemini if schema available
+        3. Log errors to meta_data_status
+    """
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    current = meta_service.get_pipeline_status(engine_id)
+    if current["status"] == "running":
+        return {"message": "Pipeline already running", "status": "running"}
+
+    def run_task():
+        bg_db = next(database.get_db())
+        try:
+            meta_service.perform_full_pipeline(engine_id, bg_db)
+        finally:
+            bg_db.close()
+
+    background_tasks.add_task(run_task)
+    return {"message": "Full pipeline started", "status": "running"}
+
+
+@router.get("/pipeline/status/{engine_id}")
+def get_pipeline_status(
+    engine_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """Returns current full-pipeline status: idle | running | done | error"""
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    return meta_service.get_pipeline_status(engine_id)
+
 
 
 @router.get("/file-metadata/{engine_id}")

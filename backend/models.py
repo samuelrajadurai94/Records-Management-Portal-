@@ -66,6 +66,8 @@ class SegregationResult(Base):
     latest               = Column(Boolean, default=False)
     text_extraction_status = Column(String(200), default="")
     metadata_json = Column(JSONB,server_default=text("'{}'::jsonb"),nullable=True)
+    meta_data_status = Column(String(500), default="")  # Per-file pipeline status / error message
+
 
 
     engine = relationship("Engine", back_populates="segregation_results")

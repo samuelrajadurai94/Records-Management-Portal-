@@ -98,8 +98,9 @@ class BoxService:
             print(f"Error uploading file {file_name}: {e}")
             return None
 
-    def upload_folder_contents(self, parent_folder_id, local_path, progress_callback=None, state={"current": 0, "total": 0}):
-        """Recursively upload folder contents to Box maintaining hierarchy with progress tracking"""
+    def upload_folder_contents(self, parent_folder_id, local_path, progress_callback=None, state={"current": 0, "total": 0, "errors": []}):
+        """Recursively upload folder contents to Box maintaining hierarchy with progress tracking.
+        Per-file errors are caught, logged in state['errors'], and skipped — upload continues."""
         if not self.client: return
 
         if not os.path.exists(local_path):
@@ -108,31 +109,42 @@ class BoxService:
 
         for item in os.listdir(local_path):
             item_path = os.path.join(local_path, item)
-            
+
             if os.path.isfile(item_path):
-                # Upload file to current parent folder
-                self.upload_file(parent_folder_id, item_path)
-                
-                # Update progress
+                try:
+                    self.upload_file(parent_folder_id, item_path)
+                except Exception as file_err:
+                    # Record the error path — relative to the engine root for readability
+                    rel_path = os.path.relpath(item_path)
+                    err_msg = f"{rel_path}: {file_err}"
+                    print(f"[Upload] Skipping file due to error: {err_msg}")
+                    state["errors"].append(err_msg)
+
+                # Always update counter — whether success or error
                 state["current"] += 1
                 if progress_callback and state["total"] > 0:
                     progress = int((state["current"] / state["total"]) * 100)
-                    progress_callback(progress)
-            
+                    progress_callback(progress, state)
+
             elif os.path.isdir(item_path):
-                # Create subfolder and recursively upload its contents
                 try:
                     subfolder = self.client.folders.create_folder(
-                        item, 
+                        item,
                         CreateFolderParent(id=parent_folder_id)
                     )
                     print(f"Created subfolder: {item}")
-                    # Recursively upload subfolder contents
                     self.upload_folder_contents(subfolder.id, item_path, progress_callback, state)
                 except Exception as e:
                     print(f"Could not create subfolder {item}: {e}")
-                    # If folder exists, try to find it and continue
-                    pass
+                    # Still increment counter for files inside the failed folder
+                    for root, dirs, files in os.walk(item_path):
+                        state["current"] += len(files)
+                        for f in files:
+                            rel = os.path.relpath(os.path.join(root, f))
+                            state["errors"].append(f"{rel}: subfolder creation failed — {e}")
+                    if progress_callback and state["total"] > 0:
+                        progress = int((state["current"] / state["total"]) * 100)
+                        progress_callback(progress, state)
 
     def get_or_create_folder(self, folder_name, parent_id):
         """Find a folder by name or create it if it doesn't exist"""
@@ -158,9 +170,11 @@ class BoxService:
             return None
 
     def create_and_upload_engine_folder(self, folder_name, local_path, progress_callback=None, company_name=None):
-        """Creates a root engine folder (inside company folder if provided) and uploads contents"""
-        if not self.client: return None
-        
+        """Creates a root engine folder (inside company folder if provided) and uploads contents.
+        Returns (root_folder, errors_list)."""
+        if not self.client: return None, []
+
+        errors = []
         try:
             # Determine parent folder (Root or Company Folder)
             parent_id = ROOT_FOLDER_ID
@@ -168,7 +182,7 @@ class BoxService:
                 company_folder = self.get_or_create_folder(company_name, ROOT_FOLDER_ID)
                 if company_folder:
                     parent_id = company_folder.id
-            
+
             # Create the Engine Root Folder (e.g. Serial Number)
             root_folder = self.client.folders.create_folder(
                 folder_name,
@@ -182,32 +196,29 @@ class BoxService:
                 CreateFolderParent(id=root_folder.id)
             )
             print(f"Created sub-container: RAW FOLDER (ID: {raw_folder.id})")
-            
+
             # Upload contents maintaining folder hierarchy into the RAW FOLDER
             if local_path and os.path.exists(local_path):
-                # Count total files for progress tracking
                 total_files = sum([len(files) for r, d, files in os.walk(local_path)])
                 print(f"Starting recursive upload of {total_files} files into RAW FOLDER...")
-                
-                # Initial progress
-                if progress_callback: progress_callback(0)
-                
-                # Upload the contents of the local folder into the RAW FOLDER
+
+                if progress_callback: progress_callback(0, {"current": 0, "total": total_files, "errors": errors})
+
+                state = {"current": 0, "total": total_files, "errors": errors}
                 self.upload_folder_contents(
-                    raw_folder.id, 
-                    local_path, 
-                    progress_callback, 
-                    state={"current": 0, "total": total_files}
+                    raw_folder.id,
+                    local_path,
+                    progress_callback,
+                    state
                 )
-                
-                # Final progress
-                if progress_callback: progress_callback(100)
-                print("Upload complete.")
-            
-            return root_folder
+
+                if progress_callback: progress_callback(100, state)
+                print(f"Upload complete. {state['current']}/{total_files} files processed, {len(errors)} errors.")
+
+            return root_folder, errors
         except Exception as e:
             print(f"Error creating engine folder {folder_name}: {e}")
-            return None
+            return None, errors
 
     def get_folder_items(self, folder_id):
         """Get all items (files and folders) in a Box folder"""
