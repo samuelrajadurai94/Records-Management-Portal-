@@ -38,14 +38,16 @@ def perform_box_upload(serial_number: str, model_name: str, upload_path: str, en
     """Background task: upload to Box with per-file error handling and rich progress updates."""
     try:
         def update_progress(percentage, state=None):
+            # Map Box's 0-100% into the 30-100% total range
+            total_progress = 30 + int(percentage * 0.7)
             upload_progress[serial_number] = {
                 "status": "running",
-                "progress": percentage,
+                "progress": total_progress,
                 "completed": state["current"] if state else 0,
                 "total":     state["total"]   if state else 0,
                 "errors":    list(state["errors"]) if state else [],
             }
-            print(f"Upload progress for {serial_number}: {percentage}% ({(state or {}).get('current',0)}/{(state or {}).get('total',0)})")
+            print(f"Upload progress for {serial_number}: {total_progress}% ({(state or {}).get('current',0)}/{(state or {}).get('total',0)})")
 
         folder_name = f"{serial_number}"
         uploaded_folder, errors = box_service.create_and_upload_engine_folder(
@@ -114,7 +116,17 @@ async def create_engine(
         temp_dir = tempfile.mkdtemp(prefix=f"engine_{serial_number}_")
         upload_path = temp_dir
 
-        for file in files:
+        # Prepare progress tracking for Phase 1 (Saving to Server)
+        total_files = len(files)
+        upload_progress[serial_number] = {
+            "status": "running",
+            "progress": 0,
+            "completed": 0,
+            "total": total_files,
+            "errors": []
+        }
+
+        for i, file in enumerate(files):
             try:
                 relative_path = file.filename.replace('\\', '/')
                 safe_relative_path = os.path.normpath(relative_path).lstrip(os.sep).lstrip('/')
@@ -132,12 +144,18 @@ async def create_engine(
 
                 with open(file_destination, "wb") as buffer:
                     shutil.copyfileobj(file.file, buffer)
+                
+                # Update progress for Phase 1
+                completed = i + 1
+                progress = int((completed / total_files) * 30) # Phase 1 is 0-30%
+                upload_progress[serial_number]["completed"] = completed
+                upload_progress[serial_number]["progress"] = progress
 
             except Exception as file_err:
                 print(f"[create_engine] Skipping file {file.filename}: {file_err}")
                 continue
 
-        print(f"Saved uploaded files to {temp_dir}")
+        print(f"Saved {total_files} uploaded files to {temp_dir}")
 
     # Create engine in DB first (without Box ID yet)
     db_engine = models.Engine(
@@ -155,13 +173,8 @@ async def create_engine(
 
     # Start Background Upload to Box
     if upload_path:
-        upload_progress[serial_number] = {
-            "status": "running",
-            "progress": 0,
-            "completed": 0,
-            "total": 0,
-            "errors": []
-        }
+        # Note: perform_box_upload will reset completed to 0 for its own tracking but keep total.
+        # It will also start progress from 30% to 100%.
         background_tasks.add_task(
             perform_box_upload, 
             serial_number, 
@@ -172,6 +185,119 @@ async def create_engine(
             current_user.company_name
         )
     
+    return db_engine
+
+def perform_box_link_import(serial_number: str, engine_id: int, shared_link: str, company_name: str, db_session_factory):
+    """Background task: import a folder from a Box shared link into our storage."""
+    try:
+        upload_progress[serial_number]["status"] = "running"
+        upload_progress[serial_number]["progress"] = 10
+
+        # Determine parent (under company or root)
+        from services.box_service import ROOT_FOLDER_ID
+        parent_id = ROOT_FOLDER_ID
+        if company_name:
+            company_folder = box_service.get_or_create_folder(company_name, ROOT_FOLDER_ID)
+            if company_folder:
+                parent_id = company_folder.id
+
+        upload_progress[serial_number]["progress"] = 20
+
+        # Create engine root folder (e.g. serial_number)
+        engine_root = box_service.client.folders.create_folder(
+            serial_number,
+            __import__("box_sdk_gen.managers.folders", fromlist=["CreateFolderParent"]).CreateFolderParent(id=parent_id)
+        )
+        upload_progress[serial_number]["progress"] = 30
+
+        # Create RAW FOLDER inside
+        from box_sdk_gen.managers.folders import CreateFolderParent
+        raw_folder = box_service.client.folders.create_folder(
+            "RAW FOLDER",
+            CreateFolderParent(id=engine_root.id)
+        )
+        upload_progress[serial_number]["progress"] = 40
+
+        # Copy shared link folder into RAW FOLDER
+        copied = box_service.import_folder_from_shared_boxlink(shared_link, raw_folder.id)
+
+        if not copied:
+            raise Exception("import_folder_from_shared_boxlink returned None — check shared link permissions.")
+
+        upload_progress[serial_number]["progress"] = 95
+
+        # Update DB with the engine root box_folder_id
+        db = db_session_factory()
+        try:
+            eng = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
+            if eng:
+                eng.box_folder_id = engine_root.id
+                db.commit()
+        finally:
+            db.close()
+
+        upload_progress[serial_number] = {
+            "status": "done",
+            "progress": 100,
+            "completed": 1,
+            "total": 1,
+            "errors": []
+        }
+        print(f"[import-from-link] Done for {serial_number}")
+
+    except Exception as e:
+        print(f"[import-from-link] Error for {serial_number}: {e}")
+        upload_progress[serial_number] = {
+            "status": "error",
+            "progress": 0,
+            "completed": 0,
+            "total": 0,
+            "errors": [str(e)]
+        }
+
+@router.post("/import-from-link", response_model=schemas.Engine)
+async def import_engine_from_box_link(
+    background_tasks: BackgroundTasks,
+    serial_number: str = Form(...),
+    box_link: str = Form(...),
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user)
+):
+    """Import an engine folder from a Box shared link into our Box storage."""
+    # Check for duplicate
+    existing = db.query(models.Engine).filter(models.Engine.serial_number == serial_number).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Engine with this serial number already exists")
+    
+    # Create engine record
+    db_engine = models.Engine(
+        model_name=serial_number,
+        serial_number=serial_number,
+        owner_id=current_user.id,
+        box_folder_id=None
+    )
+    db.add(db_engine)
+    db.commit()
+    db.refresh(db_engine)
+
+    # Init progress
+    upload_progress[serial_number] = {
+        "status": "running",
+        "progress": 5,
+        "completed": 0,
+        "total": 1,
+        "errors": []
+    }
+
+    background_tasks.add_task(
+        perform_box_link_import,
+        serial_number,
+        db_engine.id,
+        box_link,
+        current_user.company_name,
+        database.SessionLocal
+    )
+
     return db_engine
 
 @router.get("/{engine_id}", response_model=schemas.Engine)

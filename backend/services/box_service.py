@@ -365,5 +365,39 @@ class BoxService:
             print(f"Error deleting folder {folder_id}: {e}")
             return False
 
+    def import_folder_from_shared_boxlink(self, shared_link_url, dest_parent_id):
+        """Imports a folder from a public shared link into our Box storage recursively."""
+        if not self.client: return None
+        
+        try:
+        # Step 1: Resolve shared link to get the folder
+            boxapi_header = f"shared_link={shared_link_url}"
+            shared_folder = self.client.shared_links_folders.find_folder_for_shared_link(
+                boxapi=boxapi_header
+            )
+            print(f"Shared Folder: {shared_folder.id} - {shared_folder.name}")
+
+            # Step 2: Copy to root folder ("GEM REC PORTAL")
+            copied_folder = self.client.folders.copy_folder(
+                folder_id=shared_folder.id,
+                parent={"id":"359797132460"}
+            )
+            print(f"copied to box root folder: {copied_folder.id}")
+
+            # Step 3: Move it to your desired subfolder
+
+            moved_folder = self.client.folders.update_folder_by_id(
+                folder_id=copied_folder.id,
+                parent={"id": dest_parent_id}
+            )
+            print(f"Moved to subfolder: {moved_folder.id}")
+            return moved_folder.id
+        except Exception as e:
+            print(f"Error importing from shared link: {e}")
+            return None
+
+
+    
+
 box_service = BoxService()
 
