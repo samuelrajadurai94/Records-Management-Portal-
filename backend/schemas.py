@@ -31,6 +31,7 @@ class TokenData(BaseModel):
 class EngineBase(BaseModel):
     model_name: str
     serial_number: str
+    csn_value: Optional[int] = 0
 
 class EngineCreate(EngineBase):
     pass
@@ -40,6 +41,7 @@ class Engine(EngineBase):
     owner_id: int
     created_at: datetime
     box_folder_id: Optional[str] = None
+    csn_value: int
     
     class Config:
         from_attributes = True

@@ -7,6 +7,12 @@ from services.box_service import box_service
 import os
 import shutil
 import tempfile
+import multipart.multipart
+
+# Increase multipart file limits to allow large folder uploads (>1000 files)
+multipart.multipart.parse_options_header = multipart.multipart.parse_options_header
+multipart.multipart.FormParser.MAX_FILES = 100000
+multipart.multipart.FormParser.MAX_FIELDS = 100000
 
 router = APIRouter(
     prefix="/engines",
@@ -95,6 +101,7 @@ def perform_box_upload(serial_number: str, model_name: str, upload_path: str, en
 async def create_engine(
     background_tasks: BackgroundTasks,
     serial_number: str = Form(...),
+    csn: int = Form(0),
     files: List[UploadFile] = File(None),
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(dependencies.get_current_user)
@@ -146,9 +153,7 @@ async def create_engine(
                     shutil.copyfileobj(file.file, buffer)
                 
                 # Update progress for Phase 1
-                completed = i + 1
-                progress = int((completed / total_files) * 30) # Phase 1 is 0-30%
-                upload_progress[serial_number]["completed"] = completed
+                progress = int(((i + 1) / total_files) * 30) # Phase 1 is 0-30%
                 upload_progress[serial_number]["progress"] = progress
 
             except Exception as file_err:
@@ -161,6 +166,7 @@ async def create_engine(
     db_engine = models.Engine(
         model_name=model_name,
         serial_number=serial_number,
+        csn_value=csn,
         owner_id=current_user.id,
         box_folder_id=None # Will be updated by background task
     )
@@ -260,6 +266,7 @@ async def import_engine_from_box_link(
     background_tasks: BackgroundTasks,
     serial_number: str = Form(...),
     box_link: str = Form(...),
+    csn: int = Form(0),
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(dependencies.get_current_user)
 ):
@@ -273,6 +280,7 @@ async def import_engine_from_box_link(
     db_engine = models.Engine(
         model_name=serial_number,
         serial_number=serial_number,
+        csn_value=csn,
         owner_id=current_user.id,
         box_folder_id=None
     )

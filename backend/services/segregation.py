@@ -41,7 +41,6 @@ VECTORIZER_PATH  = BACKEND_DIR / "Model" / os.getenv("VECTORIZER_NAME")
 KEYWORDS_CSV     = BACKEND_DIR / "Source" / "Keywords_30_7_25.csv"
 READABILITY_THRESHOLD = float(os.getenv("READABILITY_THRESHOLD", "0.4"))
 AI_MODEL_CONF    = float(os.getenv("AI_MODEL_CONF", "0.0"))
-csn_value = os.getenv("csn_value",0)
 
 # ── OCR Tool Paths ─────────────────────────────────────────────────────────
 # ocrmypdf calls Tesseract and Ghostscript directly as subprocesses —
@@ -261,12 +260,13 @@ def _folder_keyword_match(folder_path: str, file_ext: str) -> str | None:
     return None
 
 #"{:,}".format(25766)
-def check_latest(text_list,csn_value):    
+def check_latest(text_list,csn_value):
+    if csn_value==0: return False   
     if any(any(number in page for number in [csn_value,"{:,}".format(int(csn_value)),
                                              "{:,}".format(int(csn_value)).replace(",", "."),
                                              "{:,}".format(int(csn_value)).replace(",", "'")])for page in text_list):
         Latest =True
-    else: Latest =False
+    else: Latest =False 
     return Latest
 
 # ─────────────────────────────────────────────────────────────
@@ -433,7 +433,7 @@ def get_job_status(engine_id: int) -> str:
     return _job_status.get(engine_id, "idle")
 
 
-def _process_single_file(engine_id: int, file_info: dict) -> dict:
+def _process_single_file(engine_id: int, file_info: dict, engine_csn: int) -> dict:
     """
     Process a single file — classify it via folder match, AI/OCR, or extension.
     This function is PURE (no DB access) so it is safe to run in threads.
@@ -473,7 +473,7 @@ def _process_single_file(engine_id: int, file_info: dict) -> dict:
                 file_info["box_file_id"]
             ).read()
             ai_result = _classify_pdf_bytes(pdf_bytes, file_info["box_file_name"])
-            Latest = check_latest([ai_result["raw_text"]], csn_value)
+            Latest = check_latest([ai_result["raw_text"]], engine_csn)
             result_data["latest"] = True if Latest else False
             result_data.update(ai_result)
         except Exception as e:
@@ -534,10 +534,12 @@ def perform_auto_segregation(engine_id: int, db: Session):
         results: list[dict] = []
         completed = 0
 
+        engine_csn = engine.csn_value or 0
+
         with ThreadPoolExecutor(max_workers=SEG_WORKERS) as executor:
             # Submit all files to the thread pool
             future_to_file = {
-                executor.submit(_process_single_file, engine_id, fi): fi
+                executor.submit(_process_single_file, engine_id, fi, engine_csn): fi
                 for fi in all_files
             }
 

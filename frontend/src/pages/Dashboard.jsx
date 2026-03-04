@@ -9,6 +9,7 @@ export default function Dashboard() {
     const { user, logout } = useAuth();
     const [showAddModal, setShowAddModal] = useState(false);
     const [serialNumber, setSerialNumber] = useState('');
+    const [csn, setCsn] = useState('');
     const [selectedFiles, setSelectedFiles] = useState(null);
     const [uploadProgress, setUploadProgress] = useState(0);
     const [isUploading, setIsUploading] = useState(false);
@@ -23,10 +24,9 @@ export default function Dashboard() {
     const [engineToDelete, setEngineToDelete] = useState(null);
     const [deleteComplete, setDeleteComplete] = useState(false);
     const [deletedEngineSerial, setDeletedEngineSerial] = useState('');
-    // Box Link Import states
-    const [showBoxLinkModal, setShowBoxLinkModal] = useState(false);
-    const [boxLinkStep, setBoxLinkStep] = useState(1); // 1=form, 2=confirm
-    const [boxLinkSerial, setBoxLinkSerial] = useState('');
+
+    // Unified Add Engine Modal state
+    const [uploadMethod, setUploadMethod] = useState('local'); // 'local' or 'box'
     const [boxLinkUrl, setBoxLinkUrl] = useState('');
     const [boxLinkError, setBoxLinkError] = useState('');
 
@@ -45,113 +45,45 @@ export default function Dashboard() {
 
     const [uploadStage, setUploadStage] = useState('');
 
-    const handleBoxLinkImport = async () => {
-        if (!boxLinkSerial.trim() || !boxLinkUrl.trim()) {
-            setBoxLinkError('Both serial number and Box link are required.');
-            return;
-        }
-        setBoxLinkError('');
-        setIsUploading(true);
-        setUploadProgress(5);
-        setUploadComplete(false);
-        setUploadSummary(null);
-        setUploadErrors([]);
-        setUploadFilesCompleted(0);
-        setUploadFilesTotal(1);
-        setUploadedEngineSerial(boxLinkSerial);
-        setUploadStage('Connecting to Box, creating folder structure...');
-        setShowBoxLinkModal(false);
-        setBoxLinkStep(1);
-
-        const currentSerial = boxLinkSerial;
-        let pollInterval = null;
-
-        try {
-            const formData = new FormData();
-            formData.append('serial_number', currentSerial);
-            formData.append('box_link', boxLinkUrl);
-
-            // Start polling
-            pollInterval = setInterval(async () => {
-                try {
-                    const encodedSN = encodeURIComponent(currentSerial);
-                    const statusRes = await api.get(`/engines/upload-status/${encodedSN}`);
-                    const d = statusRes.data;
-                    if (d.status === 'running' || d.progress > 0) {
-                        setUploadProgress(d.progress ?? 5);
-                        setUploadStage(d.progress < 40
-                            ? 'Creating folder structure in Box...'
-                            : 'Copying files from source to your Box storage...');
-                    }
-                    if (d.status === 'done' || d.status === 'error') {
-                        clearInterval(pollInterval);
-                        pollInterval = null;
-                        setUploadSummary({
-                            serial: currentSerial,
-                            succeeded: d.status === 'done' ? 1 : 0,
-                            total: 1,
-                            errors: d.errors ?? [],
-                            isError: d.status === 'error',
-                        });
-                        setUploadComplete(true);
-                        setUploadedEngineSerial(currentSerial);
-                        setTimeout(() => setUploadComplete(false), 12000);
-                        fetchEngines();
-                        setIsUploading(false);
-                        setUploadStage('');
-                        setBoxLinkSerial('');
-                        setBoxLinkUrl('');
-                    }
-                } catch (pollErr) {
-                    console.error('Box link poll error:', pollErr);
-                }
-            }, 1500);
-
-            await api.post('/engines/import-from-link', formData);
-        } catch (err) {
-            if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-            const status = err?.response?.status;
-            const detail = err?.response?.data?.detail || '';
-            if (status === 400 && detail.toLowerCase().includes('already exists')) {
-                alert(`Engine serial number "${currentSerial}" already exists. Use a different serial number.`);
-            } else {
-                alert(detail || 'Failed to import from Box link. Check console for details.');
-            }
-            setIsUploading(false);
-            setUploadProgress(0);
-            setUploadStage('');
-        }
-    };
 
     const handleAddEngine = async (e) => {
         e.preventDefault();
+
+        if (uploadMethod === 'box' && !boxLinkUrl.trim()) {
+            setBoxLinkError('Box shared link is required.');
+            return;
+        }
+
         setIsUploading(true);
-        setUploadProgress(0);
+        setUploadProgress(uploadMethod === 'box' ? 5 : 0);
         setUploadComplete(false);
         setUploadSummary(null);
         setUploadErrors([]);
         setUploadFilesCompleted(0);
-        setUploadFilesTotal(0);
+        setUploadFilesTotal(uploadMethod === 'box' ? 1 : 0);
         setUploadedEngineSerial(serialNumber);
-        setUploadStage('Initializing upload...');
+        setUploadStage(uploadMethod === 'box' ? 'Connecting to Box, creating folder structure...' : 'Initializing upload...');
 
         const currentSerial = serialNumber;
-        // Declare OUTSIDE try so catch can always clear it
         let pollInterval = null;
 
         try {
             const formData = new FormData();
             formData.append('serial_number', currentSerial);
+            formData.append('csn', csn || '0');
 
-            if (selectedFiles) {
-                for (let i = 0; i < selectedFiles.length; i++) {
-                    formData.append('files', selectedFiles[i]);
+            if (uploadMethod === 'local') {
+                if (selectedFiles) {
+                    for (let i = 0; i < selectedFiles.length; i++) {
+                        formData.append('files', selectedFiles[i]);
+                    }
                 }
+            } else {
+                formData.append('box_link', boxLinkUrl);
             }
 
             setShowAddModal(false);
 
-            // 1. Start Polling for unified backend progress
             pollInterval = setInterval(async () => {
                 try {
                     const encodedSN = encodeURIComponent(currentSerial);
@@ -159,13 +91,10 @@ export default function Dashboard() {
                     const d = statusRes.data;
                     const serverProgress = d.progress ?? 0;
 
-                    // Update UI whenever we have server info
                     if (d.status === 'running' || serverProgress > 0) {
-                        // Dynamically update stage based on progress
-                        const stage = serverProgress <= 30
-                            ? 'Saving files to server...'
-                            : 'Uploading files to Box...';
-                        setUploadStage(stage);
+                        setUploadStage(uploadMethod === 'box'
+                            ? (serverProgress < 40 ? 'Creating folder structure in Box...' : 'Copying files from source to your Box storage...')
+                            : 'Uploading files...');
 
                         setUploadProgress(serverProgress);
                         setUploadFilesCompleted(d.completed ?? 0);
@@ -173,15 +102,14 @@ export default function Dashboard() {
                         setUploadErrors(d.errors ?? []);
                     }
 
-                    // Terminal states: always stop polling
                     if (d.status === 'done' || d.status === 'error' || serverProgress >= 100) {
                         clearInterval(pollInterval);
                         pollInterval = null;
-                        const succeeded = (d.total ?? 0) - (d.errors?.length ?? 0);
+                        const succeeded = uploadMethod === 'box' ? (d.status === 'done' ? 1 : 0) : ((d.total ?? 0) - (d.errors?.length ?? 0));
                         setUploadSummary({
                             serial: currentSerial,
-                            succeeded,
-                            total: d.total ?? 0,
+                            succeeded: succeeded,
+                            total: uploadMethod === 'box' ? 1 : (d.total ?? 0),
                             errors: d.errors ?? [],
                             isError: d.status === 'error',
                         });
@@ -195,17 +123,21 @@ export default function Dashboard() {
                 } catch (err) {
                     console.error('Polling error:', err);
                 }
-            }, 1000);
+            }, uploadMethod === 'box' ? 1500 : 1000);
 
-            // 2. Transmit files to backend
-            await api.post('/engines/', formData);
+            if (uploadMethod === 'local') {
+                await api.post('/engines/', formData);
+            } else {
+                await api.post('/engines/import-from-link', formData);
+            }
 
             setSerialNumber('');
+            setCsn('');
             setSelectedFiles(null);
+            setBoxLinkUrl('');
+            setBoxLinkError('');
         } catch (err) {
-            // Always clear the interval on any error
             if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-
             const status = err?.response?.status;
             const detail = err?.response?.data?.detail || '';
 
@@ -339,16 +271,7 @@ export default function Dashboard() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <h1 style={{ margin: 0, fontSize: '1.5rem' }}>Aircraft Engines</h1>
                     <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                        <button
-                            onClick={() => { setShowBoxLinkModal(true); setBoxLinkStep(1); setBoxLinkError(''); }}
-                            className="btn btn-outline"
-                            disabled={isUploading}
-                            title="Import folder from Box shared link"
-                            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-                        >
-                            <Link2 size={16} /> Import from Box Link
-                        </button>
-                        <button onClick={() => setShowAddModal(true)} className="btn btn-primary" disabled={isUploading}>
+                        <button onClick={() => { setShowAddModal(true); setUploadMethod('local'); setBoxLinkError(''); }} className="btn btn-primary" disabled={isUploading}>
                             <Plus size={18} /> ADD NEW ENGINE
                         </button>
                     </div>
@@ -481,7 +404,7 @@ export default function Dashboard() {
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
                                 <div>
                                     <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{eng.model_name}</h3>
-                                    <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem' }}>SN: {eng.serial_number}</p>
+                                    <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem' }}>SN: {eng.serial_number} | CSN: {eng.csn_value ?? 0}</p>
                                     {eng.box_folder_id && <span style={{ fontSize: '0.8rem', color: 'green' }}>Box Linked</span>}
                                 </div>
                                 <div style={{ display: 'flex', gap: '8px', zIndex: 10, position: 'relative' }}>
@@ -524,62 +447,116 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            {/* Add Modal - Unchanged logic */}
             {showAddModal && (
                 <div style={{
                     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
                     background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center',
                     backdropFilter: 'blur(4px)', zIndex: 100
                 }}>
-                    <div className="glass-panel animate-fade-in" style={{ padding: '2rem', width: '400px', background: 'white' }}>
-                        <h2>Add New Engine</h2>
+                    <div className="glass-panel animate-fade-in" style={{ padding: '2rem', width: '450px', background: 'white', borderRadius: '16px' }}>
+                        <h2 style={{ marginBottom: '1.5rem' }}>Add New Engine</h2>
+
+                        {/* Method Selection Tabs */}
+                        <div style={{ display: 'flex', background: '#f1f5f9', padding: '4px', borderRadius: '12px', marginBottom: '1.5rem' }}>
+                            <button
+                                onClick={() => setUploadMethod('local')}
+                                style={{
+                                    flex: 1, padding: '10px', borderRadius: '10px', border: 'none', cursor: 'pointer',
+                                    background: uploadMethod === 'local' ? 'white' : 'transparent',
+                                    boxShadow: uploadMethod === 'local' ? '0 2px 4px rgba(0,0,0,0.05)' : 'none',
+                                    fontWeight: 600, color: uploadMethod === 'local' ? 'var(--primary)' : '#64748b',
+                                    transition: 'all 0.2s'
+                                }}
+                            >
+                                Local Folder
+                            </button>
+                            <button
+                                onClick={() => setUploadMethod('box')}
+                                style={{
+                                    flex: 1, padding: '10px', borderRadius: '10px', border: 'none', cursor: 'pointer',
+                                    background: uploadMethod === 'box' ? 'white' : 'transparent',
+                                    boxShadow: uploadMethod === 'box' ? '0 2px 4px rgba(0,0,0,0.05)' : 'none',
+                                    fontWeight: 600, color: uploadMethod === 'box' ? 'var(--primary)' : '#64748b',
+                                    transition: 'all 0.2s'
+                                }}
+                            >
+                                Box Link
+                            </button>
+                        </div>
+
                         <form onSubmit={handleAddEngine}>
+                            <label style={{ fontWeight: 600, fontSize: '0.9rem', display: 'block', marginBottom: '6px' }}>Engine Serial Number</label>
                             <input
-                                placeholder="Engine Serial Number"
+                                placeholder="e.g. 577270"
                                 value={serialNumber}
                                 onChange={e => setSerialNumber(e.target.value)}
                                 required
-                                style={{ marginBottom: '1rem' }}
+                                style={{ marginBottom: '1.5rem', width: '100%' }}
                             />
 
-                            <div style={{ margin: '15px 0', padding: '20px', background: '#f8f9fa', borderRadius: '12px', border: '2px dashed #ccc' }}>
-                                <label style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '12px' }}>
-                                    Select Folder from Computer
-                                </label>
+                            <label style={{ fontWeight: 600, fontSize: '0.9rem', display: 'block', marginBottom: '6px' }}>CSN (Cycles Since New)</label>
+                            <input
+                                type="number"
+                                placeholder="e.g. 1500 (Optional, defaults to 0)"
+                                value={csn}
+                                onChange={e => setCsn(e.target.value)}
+                                style={{ marginBottom: '1.5rem', width: '100%' }}
+                            />
 
-                                <div style={{ position: 'relative' }}>
-                                    <input
-                                        type="file"
-                                        webkitdirectory=""
-                                        directory=""
-                                        multiple
-                                        onChange={(e) => setSelectedFiles(e.target.files)}
-                                        style={{
-                                            opacity: 0, position: 'absolute', top: 0, left: 0,
-                                            width: '100%', height: '100%', cursor: 'pointer'
-                                        }}
-                                    />
-                                    <div style={{
-                                        background: 'white', border: '2px solid var(--primary)', borderRadius: '12px',
-                                        padding: '16px', textAlign: 'center', color: 'var(--primary)', fontWeight: 600, pointerEvents: 'none',
-                                        transition: 'all 0.2s ease'
-                                    }}>
-                                        {selectedFiles && selectedFiles.length > 0 ?
-                                            `✓ ${selectedFiles.length} files selected` :
-                                            '📁 Click to Select Folder'
-                                        }
+                            {uploadMethod === 'local' ? (
+                                <div style={{ margin: '0 0 1.5rem', padding: '20px', background: '#f8f9fa', borderRadius: '12px', border: '2px dashed #cbd5e1' }}>
+                                    <label style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '12px' }}>
+                                        Select Folder from Computer
+                                    </label>
+                                    <div style={{ position: 'relative' }}>
+                                        <input
+                                            type="file"
+                                            webkitdirectory=""
+                                            directory=""
+                                            multiple
+                                            onChange={(e) => setSelectedFiles(e.target.files)}
+                                            style={{
+                                                opacity: 0, position: 'absolute', top: 0, left: 0,
+                                                width: '100%', height: '100%', cursor: 'pointer'
+                                            }}
+                                        />
+                                        <div style={{
+                                            background: 'white', border: '2px solid var(--primary)', borderRadius: '12px',
+                                            padding: '16px', textAlign: 'center', color: 'var(--primary)', fontWeight: 600, pointerEvents: 'none',
+                                            transition: 'all 0.2s ease'
+                                        }}>
+                                            {selectedFiles && selectedFiles.length > 0 ?
+                                                `✓ ${selectedFiles.length} files selected` :
+                                                '📁 Click to Select Folder'
+                                            }
+                                        </div>
                                     </div>
+                                    <small style={{ color: '#64748b', fontSize: '0.8rem', display: 'block', marginTop: '12px', lineHeight: 1.5 }}>
+                                        All files within the selected folder will be uploaded.
+                                    </small>
                                 </div>
+                            ) : (
+                                <div style={{ marginBottom: '1.5rem' }}>
+                                    <label style={{ fontWeight: 600, fontSize: '0.9rem', display: 'block', marginBottom: '6px' }}>Box Shared Link URL</label>
+                                    <input
+                                        placeholder="https://app.box.com/s/..."
+                                        value={boxLinkUrl}
+                                        onChange={e => setBoxLinkUrl(e.target.value)}
+                                        style={{ marginBottom: '0.5rem', width: '100%' }}
+                                    />
+                                    <small style={{ color: '#64748b', display: 'block', marginBottom: '1rem', lineHeight: 1.5 }}>
+                                        Paste the shared link of the folder. It must allow downloads.
+                                    </small>
+                                    {boxLinkError && (
+                                        <p style={{ color: '#e53e3e', fontSize: '0.875rem', marginBottom: '1rem' }}>⚠️ {boxLinkError}</p>
+                                    )}
+                                </div>
+                            )}
 
-                                <small style={{ color: '#666', fontSize: '0.8rem', display: 'block', marginTop: '12px', lineHeight: 1.5 }}>
-                                    Choose a folder containing your engine records. All files will be uploaded to Box.
-                                </small>
-                            </div>
-
-                            <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                            <div style={{ display: 'flex', gap: '1rem', marginTop: '2rem' }}>
                                 <button type="button" onClick={() => setShowAddModal(false)} className="btn btn-outline" style={{ flex: 1 }} disabled={isUploading}>Cancel</button>
                                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={isUploading}>
-                                    {isUploading ? 'Uploading...' : 'Add Engine'}
+                                    {isUploading ? 'Processing...' : (uploadMethod === 'local' ? 'Add Engine' : 'Start Import')}
                                 </button>
                             </div>
                         </form>
@@ -587,111 +564,6 @@ export default function Dashboard() {
                 </div>
             )}
 
-            {/* Box Link Import Modal */}
-            {showBoxLinkModal && (
-                <div style={{
-                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-                    background: 'rgba(0,0,0,0.55)', display: 'flex', justifyContent: 'center', alignItems: 'center',
-                    backdropFilter: 'blur(4px)', zIndex: 100
-                }}>
-                    <div className="glass-panel animate-fade-in" style={{ padding: '2.5rem', width: '480px', background: 'white', borderRadius: '16px' }}>
-
-                        {boxLinkStep === 1 && (
-                            <>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '1.5rem' }}>
-                                    <div style={{ background: '#EBF8FF', borderRadius: '50%', width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        <Link2 size={22} color="#3182ce" />
-                                    </div>
-                                    <div>
-                                        <h2 style={{ margin: 0, fontSize: '1.3rem' }}>Import from Box Link</h2>
-                                        <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-dim)' }}>Copy a folder directly from another Box account</p>
-                                    </div>
-                                </div>
-
-                                <label style={{ fontWeight: 600, fontSize: '0.9rem', display: 'block', marginBottom: '6px' }}>Engine Serial Number</label>
-                                <input
-                                    placeholder="e.g. 577270"
-                                    value={boxLinkSerial}
-                                    onChange={e => setBoxLinkSerial(e.target.value)}
-                                    style={{ marginBottom: '1.25rem', width: '100%' }}
-                                />
-
-                                <label style={{ fontWeight: 600, fontSize: '0.9rem', display: 'block', marginBottom: '6px' }}>Box Shared Link URL</label>
-                                <input
-                                    placeholder="https://app.box.com/s/..."
-                                    value={boxLinkUrl}
-                                    onChange={e => setBoxLinkUrl(e.target.value)}
-                                    style={{ marginBottom: '0.5rem', width: '100%' }}
-                                />
-                                <small style={{ color: '#718096', display: 'block', marginBottom: '1.5rem', lineHeight: 1.5 }}>
-                                    Paste the shared link URL for the folder you want to import. The folder must allow downloads.
-                                </small>
-
-                                {boxLinkError && (
-                                    <p style={{ color: '#e53e3e', fontSize: '0.875rem', marginBottom: '1rem' }}>⚠️ {boxLinkError}</p>
-                                )}
-
-                                <div style={{ display: 'flex', gap: '1rem' }}>
-                                    <button type="button" onClick={() => setShowBoxLinkModal(false)} className="btn btn-outline" style={{ flex: 1 }}>Cancel</button>
-                                    <button
-                                        type="button"
-                                        className="btn btn-primary"
-                                        style={{ flex: 1 }}
-                                        onClick={() => {
-                                            if (!boxLinkSerial.trim() || !boxLinkUrl.trim()) {
-                                                setBoxLinkError('Both serial number and Box link are required.');
-                                            } else {
-                                                setBoxLinkError('');
-                                                setBoxLinkStep(2);
-                                            }
-                                        }}
-                                    >
-                                        Continue →
-                                    </button>
-                                </div>
-                            </>
-                        )}
-
-                        {boxLinkStep === 2 && (
-                            <>
-                                <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-                                    <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>🔗</div>
-                                    <h2 style={{ margin: 0, marginBottom: '0.5rem' }}>Confirm Import</h2>
-                                    <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem' }}>Please review the details before proceeding.</p>
-                                </div>
-
-                                <div style={{ background: '#F7FAFC', borderRadius: '12px', padding: '1.25rem', marginBottom: '1.5rem' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                                        <span style={{ color: 'var(--text-dim)', fontSize: '0.875rem' }}>Engine Serial</span>
-                                        <strong style={{ fontSize: '0.875rem' }}>{boxLinkSerial}</strong>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', flexDirection: 'column', gap: '4px' }}>
-                                        <span style={{ color: 'var(--text-dim)', fontSize: '0.875rem' }}>Box Shared Link</span>
-                                        <span style={{ fontSize: '0.78rem', wordBreak: 'break-all', color: '#3182ce' }}>{boxLinkUrl}</span>
-                                    </div>
-                                </div>
-
-                                <p style={{ color: '#718096', fontSize: '0.85rem', marginBottom: '1.5rem', lineHeight: 1.5 }}>
-                                    The folder from this link will be copied into your Box storage under:
-                                    <br /><strong>Company → {boxLinkSerial} → RAW FOLDER</strong>
-                                </p>
-
-                                <div style={{ display: 'flex', gap: '1rem' }}>
-                                    <button type="button" onClick={() => setBoxLinkStep(1)} className="btn btn-outline" style={{ flex: 1 }}>← Back</button>
-                                    <button
-                                        type="button"
-                                        className="btn btn-primary"
-                                        style={{ flex: 1 }}
-                                        onClick={handleBoxLinkImport}
-                                    >
-                                        ✓ Start Import
-                                    </button>
-                                </div>
-                            </>
-                        )}
-                    </div>
-                </div>
-            )}
 
             {/* Delete Confirmation Modal */}
             {showDeleteConfirm && (

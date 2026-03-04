@@ -26,6 +26,7 @@ class Engine(Base):
     owner_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     box_folder_id = Column(String, nullable=True)
+    csn_value = Column(Integer, default=0)
 
     owner = relationship("User", back_populates="engines")
     files = relationship("FileMetadata", back_populates="engine")
