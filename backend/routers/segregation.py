@@ -165,6 +165,7 @@ def get_segregation_results(
             "box_file_name":        r.box_file_name,
             "box_folder_id":        r.box_folder_id,
             "original_folder_path": r.original_folder_path,
+            "metadata_json":        r.metadata_json,
             "prediction":           r.prediction,
             "confidence":           round(r.confidence, 3),
             "method":               r.method,

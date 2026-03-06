@@ -32,6 +32,7 @@ class EngineBase(BaseModel):
     model_name: str
     serial_number: str
     csn_value: Optional[int] = 0
+    selected_llp_file_id: Optional[str] = None
 
 class EngineCreate(EngineBase):
     pass
@@ -52,6 +53,7 @@ class Engine(EngineBase):
     created_at: datetime
     box_folder_id: Optional[str] = None
     csn_value: int
+    selected_llp_file_id: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -76,24 +78,28 @@ class FileMoveRequest(BaseModel):
 
 # LLP Schemas
 class LLPRecordBase(BaseModel):
-    part_group: str
-    sr_no: int
-    description: str
-    part_number: str = ""
-    serial_number: str = ""
-    total_hours: float = 0.0
-    total_cycles: float = 0.0
-    cycles_used_dict: dict = {}
-    cycle_limits_dict: dict = {}
-    docs: str = ""
-    review_workflow: str = "Pending"
-    raise_discrepancy: bool = False
+    part_group: Optional[str] = "EXTRACTED DATA"
+    sr_no: Optional[int] = 1
+    description: Optional[str] = ""
+    part_number: Optional[str] = ""
+    serial_number: Optional[str] = ""
+    total_hours: Optional[float] = 0.0
+    total_cycles: Optional[float] = 0.0
+    cycles_used_dict: Optional[dict] = {}
+    cycle_limits_dict: Optional[dict] = {}
+    docs: Optional[str] = ""
+    review_workflow: Optional[str] = "Pending"
+    raise_discrepancy: Optional[bool] = False
+
+    class Config:
+        from_attributes = True
+        extra = "ignore"
 
 class LLPRecordCreate(LLPRecordBase):
     pass
 
 class LLPRecordUpdate(LLPRecordBase):
-    id: Optional[int] = None # Include ID to know which row to update
+    id: Optional[int] = None 
 
 class LLPRecordResponse(LLPRecordBase):
     id: int
@@ -101,4 +107,14 @@ class LLPRecordResponse(LLPRecordBase):
 
     class Config:
         from_attributes = True
-    is_segregated: bool # Moving to/within segregated section?
+
+class LLPFetchResponse(BaseModel):
+    records: List[LLPRecordResponse]
+    selected_llp_file_id: Optional[str] = None
+
+class LLPBulkUpdateRequest(BaseModel):
+    records: List[LLPRecordUpdate]
+    selected_llp_file_id: Optional[str] = None
+
+    class Config:
+        extra = "ignore"

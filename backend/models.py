@@ -27,6 +27,7 @@ class Engine(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     box_folder_id = Column(String, nullable=True)
     csn_value = Column(Integer, default=0)
+    selected_llp_file_id = Column(String, nullable=True) # Persists the file used for LLP Status
 
     owner = relationship("User", back_populates="engines")
     files = relationship("FileMetadata", back_populates="engine")
