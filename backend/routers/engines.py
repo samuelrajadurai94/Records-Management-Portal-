@@ -97,6 +97,73 @@ def perform_box_upload(serial_number: str, model_name: str, upload_path: str, en
             shutil.rmtree(upload_path)
             print(f"Cleaned up temp directory: {upload_path}")
 
+
+@router.post("/init", response_model=schemas.EngineInitResponse)
+def init_engine_upload(
+    req: schemas.EngineInitRequest,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user)
+):
+    db_engine = db.query(models.Engine).filter(models.Engine.serial_number == req.serial_number).first()
+    if db_engine:
+         raise HTTPException(status_code=400, detail="Engine with this serial number already exists")
+
+    model_name = req.serial_number
+    
+    # Init Box Structure
+    root_folder_id, folder_mapping = box_service.init_engine_folder_structure(
+        req.serial_number, 
+        req.folders, 
+        current_user.company_name
+    )
+    
+    if not root_folder_id:
+        raise HTTPException(status_code=500, detail="Failed to initialize Box storage")
+
+    db_engine = models.Engine(
+        model_name=model_name,
+        serial_number=req.serial_number,
+        csn_value=req.csn_value,
+        owner_id=current_user.id,
+        box_folder_id=root_folder_id
+    )
+    db.add(db_engine)
+    db.commit()
+    db.refresh(db_engine)
+    
+    return schemas.EngineInitResponse(
+        engine_id=db_engine.id,
+        root_folder_id=root_folder_id,
+        folder_mapping=folder_mapping
+    )
+
+@router.post("/{engine_id}/upload-single-file")
+def upload_single_file(
+    engine_id: int,
+    box_folder_id: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(dependencies.get_current_user)
+):
+    if box_folder_id == "undefined":
+        raise HTTPException(status_code=400, detail="Invalid target folder ID (undefined). Please ensure the backend server has been restarted to load recent folder mapping fixes.")
+
+    temp_dir = tempfile.mkdtemp(prefix=f"engine_single_upload_")
+    file_path = os.path.join(temp_dir, file.filename)
+    
+    try:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        result = box_service.upload_file(box_folder_id, file_path)
+        if not result:
+            raise HTTPException(status_code=500, detail="Failed to upload file to Box")
+            
+        return {"status": "success", "filename": file.filename}
+    finally:
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+
 @router.post("/", response_model=schemas.Engine)
 async def create_engine(
     background_tasks: BackgroundTasks,

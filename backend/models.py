@@ -31,6 +31,7 @@ class Engine(Base):
     owner = relationship("User", back_populates="engines")
     files = relationship("FileMetadata", back_populates="engine")
     segregation_results = relationship("SegregationResult", back_populates="engine", cascade="all, delete-orphan")
+    llp_records = relationship("LLPRecord", back_populates="engine", cascade="all, delete-orphan")
 
 class FileMetadata(Base):
     __tablename__ = "files"
@@ -72,3 +73,23 @@ class SegregationResult(Base):
 
 
     engine = relationship("Engine", back_populates="segregation_results")
+
+class LLPRecord(Base):
+    __tablename__ = "llp_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    engine_id = Column(Integer, ForeignKey("engines.id"))
+    part_group = Column(String, default="")  # e.g., "FAN ROTOR"
+    sr_no = Column(Integer)
+    description = Column(String, default="") # e.g., "Booster Spool"
+    part_number = Column(String, default="")
+    serial_number = Column(String, default="")
+    total_hours = Column(Float, default=0.0)
+    total_cycles = Column(Float, default=0.0)
+    cycles_used_dict = Column(JSONB, server_default=text("'{}'::jsonb"), nullable=True)
+    cycle_limits_dict = Column(JSONB, server_default=text("'{}'::jsonb"), nullable=True)
+    docs = Column(String, default="")
+    review_workflow = Column(String, default="Pending")
+    raise_discrepancy = Column(Boolean, default=False)
+    
+    engine = relationship("Engine", back_populates="llp_records")

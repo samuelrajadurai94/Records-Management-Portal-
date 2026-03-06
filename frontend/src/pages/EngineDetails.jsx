@@ -4,7 +4,7 @@ import api from '../api';
 import {
     FileText, Folder, FolderOpen, ChevronRight, ChevronDown,
     ArrowLeft, Search, SortAsc, CheckSquare, LogOut, Loader, X,
-    Shuffle, CheckCircle, AlertCircle, Clock
+    Shuffle, CheckCircle, AlertCircle, Clock, Save, Edit3, Eye, ShieldAlert
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -36,6 +36,423 @@ const CATEGORY_ICONS = {
 
 function getCategoryIcon(cat) {
     return CATEGORY_ICONS[cat] || '📁';
+}
+
+// ─── LLP STATUS COMPONENT ──────────────────────────────────────────────────
+const THRUST_RATINGS = ["7B20", "7B22", "7B24", "7B26", "7B27", "7B20E", "7B22E", "7B24E", "7B26E", "7B27E"];
+
+function LlpFolderNode({ node, level = 0, onSelectFile, selectedFileId }) {
+    const [isOpen, setIsOpen] = useState(false);
+
+    if (node.type === 'file') {
+        const isSelected = selectedFileId === node.id;
+        return (
+            <div
+                onClick={() => onSelectFile(node)}
+                style={{
+                    padding: `6px 10px`, paddingLeft: `${(level * 16) + 10}px`,
+                    display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+                    background: isSelected ? '#e0f2fe' : 'transparent',
+                    borderLeft: isSelected ? '3px solid #0284c7' : '3px solid transparent',
+                    color: isSelected ? '#0369a1' : '#334155',
+                    fontSize: '0.85rem'
+                }}
+                onMouseEnter={e => !isSelected && (e.currentTarget.style.background = '#f1f5f9')}
+                onMouseLeave={e => !isSelected && (e.currentTarget.style.background = 'transparent')}
+            >
+                <span style={{ fontSize: '1.2rem', color: '#64748b' }}>📄</span>
+                <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.box_file_name}</span>
+            </div>
+        );
+    }
+
+    return (
+        <div>
+            <div
+                onClick={() => setIsOpen(!isOpen)}
+                style={{
+                    padding: `6px 10px`, paddingLeft: `${(level * 16) + 10}px`,
+                    display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer',
+                    color: '#1e293b', fontWeight: 600, fontSize: '0.85rem'
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+            >
+                <span style={{ transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s', display: 'flex', color: '#94a3b8' }}>
+                    <ChevronRight size={14} />
+                </span>
+                <span style={{ fontSize: '1.2rem' }}>{isOpen ? '📂' : '📁'}</span>
+                <span>{node.name}</span>
+            </div>
+            {isOpen && (
+                <div>
+                    {Object.values(node.children).sort((a, b) => {
+                        if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+                        return a.name?.localeCompare(b.name || b.box_file_name);
+                    }).map((child, i) => (
+                        <LlpFolderNode
+                            key={child.id || child.path || i}
+                            node={child}
+                            level={level + 1}
+                            onSelectFile={onSelectFile}
+                            selectedFileId={selectedFileId}
+                        />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function LLPTable({ engineId, segData }) {
+    const [llpData, setLlpData] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [isEditing, setIsEditing] = useState(false);
+
+    // File Selection State
+    const [showFileModal, setShowFileModal] = useState(false);
+    const [selectedLlpFile, setSelectedLlpFile] = useState(null);
+
+    // Dropdown States
+    const [selectedThrusts, setSelectedThrusts] = useState(["7B20", "7B24"]);
+    const [activeThrust, setActiveThrust] = useState("7B24");
+
+    const [showThrustDropdown, setShowThrustDropdown] = useState(false);
+
+    useEffect(() => {
+        fetchLLPData();
+    }, [engineId]);
+
+    const fetchLLPData = async () => {
+        setLoading(true);
+        try {
+            const res = await api.get(`/engines/${engineId}/llp-records`);
+            setLlpData(res.data);
+        } catch (err) {
+            console.error("Failed to fetch LLP records", err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleSave = async () => {
+        setLoading(true);
+        try {
+            await api.put(`/engines/${engineId}/llp-records`, llpData);
+            setIsEditing(false);
+            // Re-fetch to normalize
+            await fetchLLPData();
+        } catch (err) {
+            console.error("Failed to save LLP records", err);
+            alert("Error saving LLP records. Please try again.");
+            setLoading(false);
+        }
+    };
+
+    const handleInputChange = (recordId, field, value) => {
+        setLlpData(prev => prev.map(row =>
+            row.id === recordId ? { ...row, [field]: value } : row
+        ));
+    };
+
+    const handleJsonbChange = (recordId, field, thrustKey, value) => {
+        setLlpData(prev => prev.map(row => {
+            if (row.id === recordId) {
+                const updatedDict = { ...row[field], [thrustKey]: parseFloat(value) || 0 };
+                return { ...row, [field]: updatedDict };
+            }
+            return row;
+        }));
+    };
+
+    const toggleThrustSelection = (rating) => {
+        setSelectedThrusts(prev =>
+            prev.includes(rating) ? prev.filter(r => r !== rating) : [...prev, rating]
+        );
+    };
+
+    // Group records by part_group
+    const groupedData = llpData.reduce((acc, row) => {
+        if (!acc[row.part_group]) acc[row.part_group] = [];
+        acc[row.part_group].push(row);
+        return acc;
+    }, {});
+
+    const getWorkflowColor = (status) => {
+        switch (status) {
+            case 'Client Approval': return { bg: '#e3f2fd', color: '#1565c0' };
+            case 'Review': return { bg: '#fff3e0', color: '#e65100' };
+            case 'Pending': return { bg: '#f5f5f5', color: '#616161' };
+            default: return { bg: '#f5f5f5', color: '#616161' };
+        }
+    };
+
+    if (loading && llpData.length === 0) return <div style={{ padding: '2rem', textAlign: 'center' }}><Loader className="spinner" /> Loading LLP Data...</div>;
+
+    return (
+        <div style={{ background: 'white', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+            {/* Header controls */}
+            <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                    <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#333' }}>LLP Status</h2>
+
+                    {/* Multi-Select Dropdown for Columns */}
+                    <div style={{ position: 'relative' }}>
+                        <button
+                            onClick={() => setShowThrustDropdown(!showThrustDropdown)}
+                            style={{ padding: '0.4rem 0.8rem', background: '#fff', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                        >
+                            Select Ratings <ChevronDown size={14} />
+                        </button>
+                        {showThrustDropdown && (
+                            <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '4px', background: 'white', border: '1px solid #ccc', borderRadius: '4px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', zIndex: 10, width: '200px', maxHeight: '300px', overflowY: 'auto' }}>
+                                {THRUST_RATINGS.map(rating => (
+                                    <label key={rating} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedThrusts.includes(rating)}
+                                            onChange={() => toggleThrustSelection(rating)}
+                                        />
+                                        {rating}
+                                    </label>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Active Highlight Select */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#666' }}>Highlight:</span>
+                        <select
+                            value={activeThrust}
+                            onChange={e => setActiveThrust(e.target.value)}
+                            style={{ padding: '0.3rem', borderRadius: '4px', border: '1px solid #ccc' }}
+                        >
+                            {selectedThrusts.map(r => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                    </div>
+                </div>
+
+                {/* File Selection & Edit / Save Buttons */}
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+
+                    {/* Select File Wrapper */}
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                        <button
+                            onClick={() => setShowFileModal(true)}
+                            style={{
+                                padding: '0.5rem 1rem', background: '#f8fafc', color: '#334155', border: '1px solid #cbd5e1',
+                                borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                fontWeight: 600, fontSize: '0.85rem', boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                            }}
+                        >
+                            <FolderOpen size={16} color="#0284c7" /> Select LLP STATUS FILE
+                        </button>
+                        {selectedLlpFile && (
+                            <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, maxWidth: '250px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                Selected: {selectedLlpFile.box_file_name}
+                            </span>
+                        )}
+                    </div>
+                    {isEditing ? (
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <button onClick={() => { setIsEditing(false); fetchLLPData(); }} style={{ padding: '0.5rem 1rem', background: '#f5f5f5', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer' }}>Cancel</button>
+                            <button onClick={handleSave} disabled={loading} style={{ padding: '0.5rem 1rem', background: '#2e7d32', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                {loading ? <Loader size={14} className="spinner" /> : <Save size={14} />} Save Changes
+                            </button>
+                        </div>
+                    ) : (
+                        <button onClick={() => setIsEditing(true)} style={{ padding: '0.5rem 1rem', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <Edit3 size={14} /> Edit Table
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {/* Table Container */}
+            <div style={{ flex: 1, overflow: 'auto', padding: '0 1.5rem 1.5rem 1.5rem' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', marginTop: '1rem', minWidth: '1300px' }}>
+                    <thead style={{ position: 'sticky', top: 0, zIndex: 5, background: 'white' }}>
+                        <tr>
+                            <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>SR. NO.</th>
+                            <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'left', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>DESCRIPTION</th>
+                            <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700, minWidth: '110px' }}>PART NUMBER</th>
+                            <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700, minWidth: '110px' }}>SERIAL NUMBER</th>
+                            <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>TOTAL HOURS</th>
+                            <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>TOTAL CYCLES</th>
+                            <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>CYCLE USED %</th>
+                            <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>DOCS</th>
+                            <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>REVIEW WORKFLOW</th>
+                            <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>RAISE DISCREPANCY</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {Object.entries(groupedData).map(([groupName, rows]) => (
+                            <React.Fragment key={groupName}>
+                                {/* Group Header Row */}
+                                <tr>
+                                    <td colSpan={10} style={{ padding: '10px 14px', background: '#1e293b', color: 'white', fontWeight: 700, letterSpacing: '0.5px' }}>
+                                        {groupName}
+                                    </td>
+                                </tr>
+
+                                {/* Data Rows */}
+                                {rows.map(row => {
+                                    // Use activeThrust or fallback
+                                    const ratingToUse = activeThrust || "7B24";
+                                    const limit = row.cycle_limits_dict?.[ratingToUse] || 0;
+                                    const used = row.cycles_used_dict?.[ratingToUse] || 0;
+                                    const cycleUsedPercent = limit > 0 ? ((used / limit) * 100).toFixed(2) : "0.00";
+                                    const workflowStyle = getWorkflowColor(row.review_workflow);
+
+                                    return (
+                                        <tr key={row.id} style={{ borderBottom: '1px solid #eee' }} onMouseEnter={e => e.currentTarget.style.background = '#fafafa'} onMouseLeave={e => e.currentTarget.style.background = 'white'}>
+                                            <td style={{ padding: '12px 10px', textAlign: 'center' }}>{row.sr_no}</td>
+                                            <td style={{ padding: '12px 10px', fontWeight: 500, color: '#334155' }}>
+                                                {row.description}
+                                                {/* Hidden edit inputs for limits/used for this rating since we don't show limit/used columns anymore, maybe need a modal. But for now keep them editable via the cycle inputs if needed, or assume backend data. */}
+                                                {isEditing && (
+                                                    <div style={{ marginTop: '5px', display: 'flex', gap: '5px', fontSize: '0.7rem' }}>
+                                                        <input placeholder="Lim" type="number" value={limit} onChange={e => handleJsonbChange(row.id, 'cycle_limits_dict', ratingToUse, e.target.value)} style={{ width: '40px', padding: '2px' }} title="Limit for this thrust" />
+                                                        <input placeholder="Used" type="number" value={used} onChange={e => handleJsonbChange(row.id, 'cycles_used_dict', ratingToUse, e.target.value)} style={{ width: '40px', padding: '2px' }} title="Used for this thrust" />
+                                                    </div>
+                                                )}
+                                            </td>
+
+                                            <td style={{ padding: '12px 10px', textAlign: 'center', fontFamily: 'monospace', color: '#64748b' }}>
+                                                {isEditing ? <input value={row.part_number || ''} onChange={e => handleInputChange(row.id, 'part_number', e.target.value)} style={{ width: '100%', padding: '4px' }} /> : (row.part_number || '-')}
+                                            </td>
+
+                                            <td style={{ padding: '12px 10px', textAlign: 'center', fontFamily: 'monospace', color: '#64748b' }}>
+                                                {isEditing ? <input value={row.serial_number || ''} onChange={e => handleInputChange(row.id, 'serial_number', e.target.value)} style={{ width: '100%', padding: '4px' }} /> : (row.serial_number || '-')}
+                                            </td>
+
+                                            <td style={{ padding: '12px 10px', textAlign: 'center' }}>
+                                                {isEditing ? <input type="number" value={row.total_hours} onChange={e => handleInputChange(row.id, 'total_hours', parseFloat(e.target.value) || 0)} style={{ width: '60px', padding: '4px', textAlign: 'center' }} /> : row.total_hours}
+                                            </td>
+
+                                            <td style={{ padding: '12px 10px', textAlign: 'center' }}>
+                                                {isEditing ? <input type="number" value={row.total_cycles} onChange={e => handleInputChange(row.id, 'total_cycles', parseFloat(e.target.value) || 0)} style={{ width: '60px', padding: '4px', textAlign: 'center' }} /> : row.total_cycles}
+                                            </td>
+
+                                            <td style={{ padding: '12px 10px', textAlign: 'center', fontWeight: 700, color: '#1e293b' }}>
+                                                {cycleUsedPercent}%
+                                            </td>
+
+                                            <td style={{ padding: '12px 10px', textAlign: 'center' }}>
+                                                <button style={{ background: 'transparent', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', color: '#94a3b8' }}>
+                                                    <Eye size={16} />
+                                                </button>
+                                            </td>
+
+                                            <td style={{ padding: '12px 10px', textAlign: 'center' }}>
+                                                {isEditing ? (
+                                                    <select
+                                                        value={row.review_workflow}
+                                                        onChange={e => handleInputChange(row.id, 'review_workflow', e.target.value)}
+                                                        style={{ padding: '4px 8px', borderRadius: '16px', border: '1px solid #cbd5e1', fontSize: '0.75rem', fontWeight: 600, outline: 'none' }}
+                                                    >
+                                                        <option value="Client Approval">Client Approval</option>
+                                                        <option value="Review">Review</option>
+                                                        <option value="Pending">Pending</option>
+                                                    </select>
+                                                ) : (
+                                                    <span style={{
+                                                        background: workflowStyle.bg, color: workflowStyle.color,
+                                                        padding: '4px 12px', borderRadius: '16px', fontSize: '0.75rem',
+                                                        fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px'
+                                                    }}>
+                                                        {row.review_workflow} <ChevronDown size={12} />
+                                                    </span>
+                                                )}
+                                            </td>
+
+                                            <td style={{ padding: '12px 10px', textAlign: 'center' }}>
+                                                <button
+                                                    onClick={() => { if (isEditing) handleInputChange(row.id, 'raise_discrepancy', !row.raise_discrepancy) }}
+                                                    style={{
+                                                        background: row.raise_discrepancy ? '#fee2e2' : '#f8fafc',
+                                                        border: row.raise_discrepancy ? '1px solid #fca5a5' : '1px solid #e2e8f0',
+                                                        borderRadius: '4px', padding: '4px 8px',
+                                                        cursor: isEditing ? 'pointer' : 'default',
+                                                        color: row.raise_discrepancy ? '#ef4444' : '#ef4444'
+                                                    }}
+                                                    title={isEditing ? "Toggle Discrepancy" : ""}
+                                                >
+                                                    <ShieldAlert size={16} />
+                                                </button>
+                                            </td>
+
+                                        </tr>
+                                    )
+                                })}
+                            </React.Fragment>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+
+            {/* LLP File Selection Modal */}
+            {showFileModal && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999,
+                    background: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }}>
+                    <div style={{
+                        background: 'white', width: '600px', height: '80vh', borderRadius: '12px',
+                        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+                        display: 'flex', flexDirection: 'column', overflow: 'hidden'
+                    }}>
+                        <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <FolderOpen size={20} color="#0284c7" />
+                                <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#1e293b' }}>Select LLP STATUS FILE</h3>
+                            </div>
+                            <button onClick={() => setShowFileModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}><X size={20} /></button>
+                        </div>
+
+                        <div style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
+                            {/* Build and Render Tree */}
+                            {(() => {
+                                const llpFiles = (segData || []).filter(f => f.category === '19. LLP Summary');
+                                if (llpFiles.length === 0) return <div style={{ textAlign: 'center', color: '#94a3b8', padding: '2rem' }}>No LLP files found in segregation.</div>;
+
+                                const root = { name: 'root', type: 'folder', children: {}, path: '' };
+                                llpFiles.forEach(f => {
+                                    let parts = [];
+                                    if (f.original_folder_path && f.original_folder_path !== 'root' && f.original_folder_path !== '.') {
+                                        parts = f.original_folder_path.split('/').filter(p => p);
+                                        if (parts[0] === 'RAW FOLDER') parts.shift();
+                                    }
+                                    let current = root;
+                                    parts.forEach(part => {
+                                        if (!current.children[part]) {
+                                            current.children[part] = { name: part, type: 'folder', children: {}, path: current.path ? `${current.path}/${part}` : part };
+                                        }
+                                        current = current.children[part];
+                                    });
+                                    current.children[f.box_file_name] = { ...f, type: 'file' };
+                                });
+
+                                return Object.values(root.children).sort((a, b) => {
+                                    if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+                                    return a.name?.localeCompare(b.name || b.box_file_name);
+                                }).map((child, i) => (
+                                    <LlpFolderNode
+                                        key={child.id || child.path || i}
+                                        node={child}
+                                        onSelectFile={(f) => { setSelectedLlpFile(f); setShowFileModal(false); }}
+                                        selectedFileId={selectedLlpFile?.id}
+                                    />
+                                ));
+                            })()}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 }
 
 export default function EngineDetails() {
@@ -78,7 +495,7 @@ export default function EngineDetails() {
     // Per-file processing: { [file_id]: { status: 'idle'|'processing'|'error', message: '' } }
     const [fileProcessing, setFileProcessing] = useState({});
 
-    const tabs = ['RAW FOLDER', 'FOLDER SEGREGATION', 'META DATA TAGGING', 'OPEN ITEM LIST', 'LLP TRACE', 'MINIPACK'];
+    const tabs = ['RAW FOLDER', 'FOLDER SEGREGATION', 'META DATA TAGGING', 'LLP STATUS', 'OPEN ITEM LIST', 'LLP TRACE', 'MINIPACK'];
 
     // ── Fetch file stats for metadata tab ──────────────────────────────────
     const fetchFileStats = useCallback(async () => {
@@ -1823,8 +2240,15 @@ export default function EngineDetails() {
                 </div>
             )}
 
+            {/* ── LLP STATUS TAB ── */}
+            {activeTab === 'LLP STATUS' && (
+                <div style={{ flex: 1, padding: '2rem', background: '#f5f5f5', overflowY: 'auto' }}>
+                    <LLPTable engineId={id} segData={segData?.results || []} />
+                </div>
+            )}
+
             {/* ── OTHER TABS (placeholder) ── */}
-            {activeTab !== 'RAW FOLDER' && activeTab !== 'FOLDER SEGREGATION' && activeTab !== 'META DATA TAGGING' && (
+            {activeTab !== 'RAW FOLDER' && activeTab !== 'FOLDER SEGREGATION' && activeTab !== 'META DATA TAGGING' && activeTab !== 'LLP STATUS' && (
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--background)' }}>
                     <div style={{ textAlign: 'center', opacity: 0.5 }}>
                         <h2 style={{ marginBottom: '1rem' }}>{activeTab}</h2>
@@ -1833,5 +2257,6 @@ export default function EngineDetails() {
                 </div>
             )}
         </div>
+
     );
 }

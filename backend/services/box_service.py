@@ -169,6 +169,103 @@ class BoxService:
             print(f"Error in get_or_create_folder for {folder_name}: {e}")
             return None
 
+    def create_folder_structure(self, parent_folder_id, folder_paths):
+        """
+        Creates a batch of folders based on relative paths and returns a mapping.
+        folder_paths: list of strings e.g. ["RAW FOLDER", "RAW FOLDER/sub1"]
+        Returns: dict mapping semantic path to Box folder ID.
+        """
+        if not self.client: return {}
+        
+        # Sort paths by depth to ensure parents exist before children
+        sorted_paths = sorted(list(set(folder_paths)), key=lambda p: p.count('/'))
+        
+        folder_mapping = {"": parent_folder_id} # Root maps to parent_folder_id
+        
+        # Cache to store children of a folder ID we've already fetched
+        # folder_id -> { "folder_name": child_folder_id }
+        folder_contents_cache = {}
+        
+        def get_child_id(parent_id, target_name):
+            if parent_id not in folder_contents_cache:
+                folder_contents_cache[parent_id] = {}
+                try:
+                    items = self.client.folders.get_folder_items(parent_id)
+                    for item in items.entries:
+                        if item.type == "folder":
+                            folder_contents_cache[parent_id][item.name] = item.id
+                except Exception as e:
+                    print(f"Error fetching items for {parent_id}: {e}")
+                    
+            return folder_contents_cache[parent_id].get(target_name)
+        
+        for path in sorted_paths:
+            if not path: continue
+            
+            parts = path.replace("\\", "/").split('/')
+            folder_name = parts[-1]
+            parent_path = '/'.join(parts[:-1])
+            
+            target_parent_id = folder_mapping.get(parent_path)
+            if not target_parent_id:
+                print(f"Warning: Parent path '{parent_path}' not found for '{path}'.")
+                continue
+            
+            # 1. Check if it already exists using our local cache of the parent
+            existing_id = get_child_id(target_parent_id, folder_name)
+            
+            if existing_id:
+                folder_mapping[path] = existing_id
+            else:
+                # 2. It doesn't exist, create it
+                try:
+                    new_folder = self.client.folders.create_folder(
+                        folder_name,
+                        CreateFolderParent(id=target_parent_id)
+                    )
+                    folder_mapping[path] = new_folder.id
+                    # Update cache so future sibling lookups know about it
+                    if target_parent_id not in folder_contents_cache:
+                        folder_contents_cache[target_parent_id] = {}
+                    folder_contents_cache[target_parent_id][folder_name] = new_folder.id
+                except Exception as e:
+                    print(f"Failed to create folder '{path}': {e}")
+                
+        # Remove the root mapping from the result
+        if "" in folder_mapping:
+            del folder_mapping[""]
+            
+        return folder_mapping
+
+    def init_engine_folder_structure(self, serial_number, folder_paths, company_name=None):
+        """Initializes the Engine root folder and its subfolders based on paths"""
+        if not self.client: return None, {}
+        
+        parent_id = ROOT_FOLDER_ID
+        if company_name:
+            company_folder = self.get_or_create_folder(company_name, ROOT_FOLDER_ID)
+            if company_folder:
+                parent_id = company_folder.id
+                
+        # Create Engine Root
+        engine_root = self.get_or_create_folder(serial_number, parent_id)
+        if not engine_root:
+            return None, {}
+            
+        # Create RAW FOLDER inside engine_root
+        raw_folder = self.get_or_create_folder("RAW FOLDER", engine_root.id)
+        if not raw_folder:
+            return None, {}
+            
+        # Create folder structure inside RAW FOLDER based on the paths array
+        # The paths received are typically like "subfolder" or "subfolder/child"
+        mapping = self.create_folder_structure(raw_folder.id, folder_paths)
+        
+        # Ensure RAW FOLDER itself is in the mapping so the frontend can find it easily
+        mapping["RAW FOLDER"] = raw_folder.id
+        
+        return engine_root.id, mapping
+
     def create_and_upload_engine_folder(self, folder_name, local_path, progress_callback=None, company_name=None):
         """Creates a root engine folder (inside company folder if provided) and uploads contents.
         Returns (root_folder, errors_list)."""

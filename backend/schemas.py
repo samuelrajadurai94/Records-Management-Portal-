@@ -36,6 +36,16 @@ class EngineBase(BaseModel):
 class EngineCreate(EngineBase):
     pass
 
+class EngineInitRequest(BaseModel):
+    serial_number: str
+    csn_value: int = 0
+    folders: List[str] = []
+
+class EngineInitResponse(BaseModel):
+    engine_id: int
+    root_folder_id: str
+    folder_mapping: dict # Maps "RAW FOLDER/subfolder" to box_folder_id
+
 class Engine(EngineBase):
     id: int
     owner_id: int
@@ -63,4 +73,32 @@ class FileMetadata(FileMetadataBase):
 
 class FileMoveRequest(BaseModel):
     target_folder: str # "root" or specific folder name
+
+# LLP Schemas
+class LLPRecordBase(BaseModel):
+    part_group: str
+    sr_no: int
+    description: str
+    part_number: str = ""
+    serial_number: str = ""
+    total_hours: float = 0.0
+    total_cycles: float = 0.0
+    cycles_used_dict: dict = {}
+    cycle_limits_dict: dict = {}
+    docs: str = ""
+    review_workflow: str = "Pending"
+    raise_discrepancy: bool = False
+
+class LLPRecordCreate(LLPRecordBase):
+    pass
+
+class LLPRecordUpdate(LLPRecordBase):
+    id: Optional[int] = None # Include ID to know which row to update
+
+class LLPRecordResponse(LLPRecordBase):
+    id: int
+    engine_id: int
+
+    class Config:
+        from_attributes = True
     is_segregated: bool # Moving to/within segregated section?

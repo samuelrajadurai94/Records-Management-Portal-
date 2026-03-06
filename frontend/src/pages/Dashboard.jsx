@@ -55,102 +55,242 @@ export default function Dashboard() {
         }
 
         setIsUploading(true);
-        setUploadProgress(uploadMethod === 'box' ? 5 : 0);
-        setUploadComplete(false);
-        setUploadSummary(null);
-        setUploadErrors([]);
-        setUploadFilesCompleted(0);
-        setUploadFilesTotal(uploadMethod === 'box' ? 1 : 0);
-        setUploadedEngineSerial(serialNumber);
-        setUploadStage(uploadMethod === 'box' ? 'Connecting to Box, creating folder structure...' : 'Initializing upload...');
-
+        setShowAddModal(false);
         const currentSerial = serialNumber;
-        let pollInterval = null;
 
-        try {
-            const formData = new FormData();
-            formData.append('serial_number', currentSerial);
-            formData.append('csn', csn || '0');
+        if (uploadMethod === 'local') {
+            if (!selectedFiles || selectedFiles.length === 0) {
+                setIsUploading(false);
+                return;
+            }
 
-            if (uploadMethod === 'local') {
-                if (selectedFiles) {
-                    for (let i = 0; i < selectedFiles.length; i++) {
-                        formData.append('files', selectedFiles[i]);
+            setUploadStage('Initializing Box folder structure...');
+            setUploadProgress(5);
+            setUploadFilesTotal(selectedFiles.length);
+            setUploadFilesCompleted(0);
+            setUploadErrors([]);
+            setUploadComplete(false);
+            setUploadSummary(null);
+            setUploadedEngineSerial(currentSerial);
+
+            try {
+                // 1. Extract unique folders (excluding the local root folder name)
+                const foldersSet = new Set();
+                for (let i = 0; i < selectedFiles.length; i++) {
+                    const file = selectedFiles[i];
+                    const relPath = file.webkitRelativePath || file.name;
+                    const parts = relPath.split('/');
+                    if (parts.length > 2) {
+                        const folderParts = parts.slice(1, -1);
+                        let builtPath = "";
+                        for (const p of folderParts) {
+                            builtPath = builtPath ? builtPath + "/" + p : p;
+                            foldersSet.add(builtPath);
+                        }
                     }
                 }
-            } else {
+                const folders = Array.from(foldersSet);
+
+                // 2. Call init
+                const initRes = await api.post('/engines/init', {
+                    serial_number: currentSerial,
+                    csn_value: parseInt(csn || '0', 10),
+                    folders: folders
+                });
+
+                const { engine_id, folder_mapping } = initRes.data;
+
+                // 3. Parallel Upload
+                setUploadStage('Uploading files to Box...');
+                const CONCURRENCY = 5; // Upload 5 files at a time
+                let activeWorkers = 0;
+                let currentIndex = 0;
+                let completed = 0;
+                let errors = [];
+
+                const filesArray = Array.from(selectedFiles);
+
+                await new Promise((resolve) => {
+                    const processNext = async () => {
+                        if (currentIndex >= filesArray.length) {
+                            if (activeWorkers === 0) resolve();
+                            return;
+                        }
+
+                        const file = filesArray[currentIndex++];
+                        activeWorkers++;
+                        processNext(); // spawn next if possible up to concurrency
+
+                        try {
+                            const relPath = file.webkitRelativePath || file.name;
+                            const parts = relPath.split('/');
+                            let semanticPath = "RAW FOLDER";
+                            // parts[0] is typically the root folder name on the user's disk
+                            // parts[last] is the file name
+                            // Everything in between is the subfolder path
+                            if (parts.length > 2) {
+                                const folderPath = parts.slice(1, -1).join('/');
+                                semanticPath = folderPath;
+                            }
+
+                            const targetFolderId = folder_mapping[semanticPath] || folder_mapping["RAW FOLDER"];
+
+                            if (!targetFolderId) {
+                                throw new Error(`Could not resolve Box folder ID for path: ${semanticPath}`);
+                            }
+
+                            const fd = new FormData();
+                            fd.append('box_folder_id', targetFolderId);
+                            fd.append('file', file);
+
+                            let retries = 3;
+                            let success = false;
+                            let lastErr = null;
+
+                            while (retries > 0 && !success) {
+                                try {
+                                    await api.post(`/engines/${engine_id}/upload-single-file`, fd);
+                                    success = true;
+                                } catch (e) {
+                                    lastErr = e;
+                                    retries--;
+                                    if (retries > 0) {
+                                        // Wait 2 seconds before retrying to allow network to clear
+                                        await new Promise(r => setTimeout(r, 2000));
+                                    }
+                                }
+                            }
+
+                            if (!success) {
+                                throw lastErr || new Error("Upload failed after 3 network attempts");
+                            }
+
+                            completed++;
+
+                            setUploadFilesCompleted(completed);
+                            setUploadProgress(5 + Math.floor((completed / filesArray.length) * 95));
+                        } catch (err) {
+                            errors.push(`${file.name}: ${err.message}`);
+                            setUploadErrors([...errors]);
+                            console.error(`Error uploading ${file.name}:`, err);
+                        } finally {
+                            activeWorkers--;
+                            processNext();
+                        }
+                    };
+
+                    for (let i = 0; i < Math.min(CONCURRENCY, filesArray.length); i++) {
+                        processNext();
+                    }
+                });
+
+                // Done
+                setUploadSummary({
+                    serial: currentSerial,
+                    succeeded: completed,
+                    total: filesArray.length,
+                    errors: errors,
+                    isError: errors.length > 0
+                });
+                setUploadComplete(true);
+                setTimeout(() => setUploadComplete(false), 12000);
+                fetchEngines();
+                setIsUploading(false);
+                setUploadStage('');
+
+                setSerialNumber('');
+                setCsn('');
+                setSelectedFiles(null);
+            } catch (err) {
+                setIsUploading(false);
+                setUploadStage('');
+                setUploadProgress(0);
+                if (err?.response?.status === 400 && err?.response?.data?.detail?.toLowerCase().includes('already exists')) {
+                    alert(`Engine serial number "${currentSerial}" already exists. Please use a different serial number.`);
+                } else {
+                    const detail = err?.response?.data?.detail || err.message;
+                    alert(`Upload failed: ${detail}`);
+                }
+            }
+        } else {
+            // BOX IMPORT LOGIC
+            setUploadProgress(5);
+            setUploadComplete(false);
+            setUploadSummary(null);
+            setUploadErrors([]);
+            setUploadFilesCompleted(0);
+            setUploadFilesTotal(1);
+            setUploadedEngineSerial(currentSerial);
+            setUploadStage('Connecting to Box, creating folder structure...');
+
+            let pollInterval = null;
+
+            try {
+                const formData = new FormData();
+                formData.append('serial_number', currentSerial);
+                formData.append('csn', csn || '0');
                 formData.append('box_link', boxLinkUrl);
-            }
 
-            setShowAddModal(false);
+                pollInterval = setInterval(async () => {
+                    try {
+                        const encodedSN = encodeURIComponent(currentSerial);
+                        const statusRes = await api.get(`/engines/upload-status/${encodedSN}`);
+                        const d = statusRes.data;
+                        const serverProgress = d.progress ?? 0;
 
-            pollInterval = setInterval(async () => {
-                try {
-                    const encodedSN = encodeURIComponent(currentSerial);
-                    const statusRes = await api.get(`/engines/upload-status/${encodedSN}`);
-                    const d = statusRes.data;
-                    const serverProgress = d.progress ?? 0;
+                        if (d.status === 'running' || serverProgress > 0) {
+                            setUploadStage(serverProgress < 40 ? 'Creating folder structure in Box...' : 'Copying files from source to your Box storage...');
+                            setUploadProgress(serverProgress);
+                            setUploadFilesCompleted(d.completed ?? 0);
+                            setUploadFilesTotal(d.total ?? 0);
+                            setUploadErrors(d.errors ?? []);
+                        }
 
-                    if (d.status === 'running' || serverProgress > 0) {
-                        setUploadStage(uploadMethod === 'box'
-                            ? (serverProgress < 40 ? 'Creating folder structure in Box...' : 'Copying files from source to your Box storage...')
-                            : 'Uploading files...');
-
-                        setUploadProgress(serverProgress);
-                        setUploadFilesCompleted(d.completed ?? 0);
-                        setUploadFilesTotal(d.total ?? 0);
-                        setUploadErrors(d.errors ?? []);
+                        if (d.status === 'done' || d.status === 'error' || serverProgress >= 100) {
+                            clearInterval(pollInterval);
+                            pollInterval = null;
+                            const succeeded = d.status === 'done' ? 1 : 0;
+                            setUploadSummary({
+                                serial: currentSerial,
+                                succeeded: succeeded,
+                                total: 1,
+                                errors: d.errors ?? [],
+                                isError: d.status === 'error',
+                            });
+                            setUploadComplete(true);
+                            setUploadedEngineSerial(currentSerial);
+                            setTimeout(() => setUploadComplete(false), 12000);
+                            fetchEngines();
+                            setIsUploading(false);
+                            setUploadStage('');
+                        }
+                    } catch (err) {
+                        console.error('Polling error:', err);
                     }
+                }, 1500);
 
-                    if (d.status === 'done' || d.status === 'error' || serverProgress >= 100) {
-                        clearInterval(pollInterval);
-                        pollInterval = null;
-                        const succeeded = uploadMethod === 'box' ? (d.status === 'done' ? 1 : 0) : ((d.total ?? 0) - (d.errors?.length ?? 0));
-                        setUploadSummary({
-                            serial: currentSerial,
-                            succeeded: succeeded,
-                            total: uploadMethod === 'box' ? 1 : (d.total ?? 0),
-                            errors: d.errors ?? [],
-                            isError: d.status === 'error',
-                        });
-                        setUploadComplete(true);
-                        setUploadedEngineSerial(currentSerial);
-                        setTimeout(() => setUploadComplete(false), 12000);
-                        fetchEngines();
-                        setIsUploading(false);
-                        setUploadStage('');
-                    }
-                } catch (err) {
-                    console.error('Polling error:', err);
-                }
-            }, uploadMethod === 'box' ? 1500 : 1000);
-
-            if (uploadMethod === 'local') {
-                await api.post('/engines/', formData);
-            } else {
                 await api.post('/engines/import-from-link', formData);
+
+                setSerialNumber('');
+                setCsn('');
+                setBoxLinkUrl('');
+                setBoxLinkError('');
+            } catch (err) {
+                if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+                const status = err?.response?.status;
+                const detail = err?.response?.data?.detail || '';
+
+                if (status === 400 && detail.toLowerCase().includes('already exists')) {
+                    alert(`Engine serial number "${currentSerial}" already exists. Please use a different serial number.`);
+                } else {
+                    console.error('Upload failed', err);
+                    alert(detail || 'Failed to add engine. Check console for details.');
+                }
+
+                setIsUploading(false);
+                setUploadProgress(0);
+                setUploadStage('');
             }
-
-            setSerialNumber('');
-            setCsn('');
-            setSelectedFiles(null);
-            setBoxLinkUrl('');
-            setBoxLinkError('');
-        } catch (err) {
-            if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-            const status = err?.response?.status;
-            const detail = err?.response?.data?.detail || '';
-
-            if (status === 400 && detail.toLowerCase().includes('already exists')) {
-                alert(`Engine serial number "${currentSerial}" already exists. Please use a different serial number.`);
-            } else {
-                console.error('Upload failed', err);
-                alert(detail || 'Failed to add engine. Check console for details.');
-            }
-
-            setIsUploading(false);
-            setUploadProgress(0);
-            setUploadStage('');
         }
     };
 
