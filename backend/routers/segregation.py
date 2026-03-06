@@ -160,6 +160,7 @@ def get_segregation_results(
 
         segregated[r.category].append({
             "id":                   r.id,
+            "category":             r.category,
             "box_file_id":          r.box_file_id,
             "box_file_name":        r.box_file_name,
             "box_folder_id":        r.box_folder_id,

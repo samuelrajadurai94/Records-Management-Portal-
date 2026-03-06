@@ -415,11 +415,16 @@ function LLPTable({ engineId, segData }) {
                         <div style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
                             {/* Build and Render Tree */}
                             {(() => {
-                                const llpFiles = (segData || []).filter(f => f.category === '19. LLP Summary');
-                                if (llpFiles.length === 0) return <div style={{ textAlign: 'center', color: '#94a3b8', padding: '2rem' }}>No LLP files found in segregation.</div>;
+                                const allFiles = segData || [];
+                                if (allFiles.length === 0) return <div style={{ textAlign: 'center', color: '#94a3b8', padding: '2rem' }}>No LLP files found in segregation.</div>;
+
+                                const latestFiles = allFiles.filter(f => f.latest);
+                                const standardFiles = allFiles.filter(f => !f.latest);
 
                                 const root = { name: 'root', type: 'folder', children: {}, path: '' };
-                                llpFiles.forEach(f => {
+
+                                // Build standard tree hierarchy
+                                standardFiles.forEach(f => {
                                     let parts = [];
                                     if (f.original_folder_path && f.original_folder_path !== 'root' && f.original_folder_path !== '.') {
                                         parts = f.original_folder_path.split('/').filter(p => p);
@@ -435,10 +440,26 @@ function LLPTable({ engineId, segData }) {
                                     current.children[f.box_file_name] = { ...f, type: 'file' };
                                 });
 
-                                return Object.values(root.children).sort((a, b) => {
+                                // Add ⭐ Latest virtual folder at the top
+                                const treeItems = Object.values(root.children).sort((a, b) => {
                                     if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
                                     return a.name?.localeCompare(b.name || b.box_file_name);
-                                }).map((child, i) => (
+                                });
+
+                                if (latestFiles.length > 0) {
+                                    const latestFolder = {
+                                        name: '⭐ Latest',
+                                        type: 'folder',
+                                        children: latestFiles.reduce((acc, f) => {
+                                            acc[f.box_file_id] = { ...f, type: 'file' };
+                                            return acc;
+                                        }, {}),
+                                        path: 'latest'
+                                    };
+                                    treeItems.unshift(latestFolder);
+                                }
+
+                                return treeItems.map((child, i) => (
                                     <LlpFolderNode
                                         key={child.id || child.path || i}
                                         node={child}
@@ -2243,7 +2264,7 @@ export default function EngineDetails() {
             {/* ── LLP STATUS TAB ── */}
             {activeTab === 'LLP STATUS' && (
                 <div style={{ flex: 1, padding: '2rem', background: '#f5f5f5', overflowY: 'auto' }}>
-                    <LLPTable engineId={id} segData={segData?.results || []} />
+                    <LLPTable engineId={id} segData={segData?.segregated?.['19. LLP Summary'] || []} />
                 </div>
             )}
 
