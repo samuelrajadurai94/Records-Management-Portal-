@@ -4,7 +4,7 @@ import api from '../api';
 import {
     FileText, Folder, FolderOpen, ChevronRight, ChevronDown,
     ArrowLeft, Search, SortAsc, CheckSquare, LogOut, Loader, X,
-    Shuffle, CheckCircle, AlertCircle, Info, Clock, Save, Edit3, Eye, ShieldAlert
+    Shuffle, CheckCircle, AlertCircle, Info, Clock, Save, Edit3, Eye, ShieldAlert, Settings
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -284,22 +284,66 @@ function LLPTable({ engineId, segData }) {
                     <div style={{ position: 'relative' }}>
                         <button
                             onClick={() => setShowThrustDropdown(!showThrustDropdown)}
-                            style={{ padding: '0.4rem 0.8rem', background: '#fff', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                            style={{
+                                padding: '0.6rem 1rem',
+                                background: '#fff',
+                                border: '1px solid #e2e8f0',
+                                borderRadius: '8px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.6rem',
+                                color: '#1e293b',
+                                fontWeight: 600,
+                                fontSize: '0.9rem',
+                                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                            }}
                         >
-                            Select Ratings <ChevronDown size={14} />
+                            <Settings size={18} style={{ color: '#3b82f6' }} />
+                            Select Thrust Ratings
+                            <ChevronDown size={16} />
                         </button>
                         {showThrustDropdown && (
-                            <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '4px', background: 'white', border: '1px solid #ccc', borderRadius: '4px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', zIndex: 10, width: '200px', maxHeight: '300px', overflowY: 'auto' }}>
-                                {THRUST_RATINGS.map(rating => (
-                                    <label key={rating} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={selectedThrusts.includes(rating)}
-                                            onChange={() => toggleThrustSelection(rating)}
-                                        />
-                                        {rating}
-                                    </label>
-                                ))}
+                            <div style={{
+                                position: 'absolute',
+                                top: 'calc(100% + 8px)',
+                                left: 0,
+                                background: 'white',
+                                border: '1px solid #e2e8f0',
+                                borderRadius: '12px',
+                                boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05)',
+                                zIndex: 100,
+                                width: '220px',
+                                overflow: 'hidden'
+                            }}>
+                                <div style={{ padding: '12px 16px', fontSize: '0.7rem', fontWeight: 700, color: '#94a3b8', letterSpacing: '0.8px', borderBottom: '1px solid #f1f5f9' }}>
+                                    SELECT RATINGS TO DISPLAY
+                                </div>
+                                <div style={{ maxHeight: '250px', overflowY: 'auto' }}>
+                                    {THRUST_RATINGS.map(rating => (
+                                        <label key={rating} style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '12px',
+                                            padding: '10px 16px',
+                                            cursor: 'pointer',
+                                            hover: { background: '#f8fafc' },
+                                            transition: 'background 0.2s',
+                                            borderBottom: '1px solid #f8fafc'
+                                        }} onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.background = 'white'}>
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedThrusts.includes(rating)}
+                                                onChange={() => {
+                                                    toggleThrustSelection(rating);
+                                                    if (!isEditing) setIsEditing(true);
+                                                }}
+                                                style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                                            />
+                                            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#475569' }}>{rating}</span>
+                                        </label>
+                                    ))}
+                                </div>
                             </div>
                         )}
                     </div>
@@ -362,25 +406,53 @@ function LLPTable({ engineId, segData }) {
                 </div>
             ) : (
                 <div style={{ flex: 1, overflow: 'auto', padding: '0 1.5rem 1.5rem 1.5rem' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', marginTop: '1rem', minWidth: '1300px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', marginTop: '1rem', minWidth: '1500px' }}>
                         <thead style={{ position: 'sticky', top: 0, zIndex: 5, background: 'white' }}>
+                            {/* Row 1 */}
                             <tr>
-                                <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>SR. NO.</th>
-                                <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'left', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>DESCRIPTION</th>
-                                <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700, minWidth: '110px' }}>PART NUMBER</th>
-                                <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700, minWidth: '110px' }}>SERIAL NUMBER</th>
-                                <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>TOTAL HOURS</th>
-                                <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>TOTAL CYCLES</th>
-                                <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>CYCLE USED %</th>
-                                <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>DOCS</th>
-                                <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>REVIEW WORKFLOW</th>
-                                <th style={{ padding: '12px 10px', borderBottom: '2px solid #ccc', textAlign: 'center', background: '#f8f9fa', color: '#64748b', fontWeight: 700 }}>RAISE DISCREPANCY</th>
+                                <th rowSpan={2} style={{ padding: '12px 10px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#f8f9fa', color: '#475569', fontWeight: 700, fontSize: '0.75rem' }}>SR. NO.</th>
+                                <th rowSpan={2} style={{ padding: '12px 10px', border: '1px solid #e2e8f0', textAlign: 'left', background: '#f8f9fa', color: '#475569', fontWeight: 700, fontSize: '0.75rem' }}>DESCRIPTION</th>
+                                <th rowSpan={2} style={{ padding: '12px 10px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#f8f9fa', color: '#475569', fontWeight: 700, fontSize: '0.75rem', minWidth: '110px' }}>PART NUMBER</th>
+                                <th rowSpan={2} style={{ padding: '12px 10px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#f8f9fa', color: '#475569', fontWeight: 700, fontSize: '0.75rem', minWidth: '110px' }}>SERIAL NUMBER</th>
+                                <th rowSpan={2} style={{ padding: '12px 10px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#f8f9fa', color: '#475569', fontWeight: 700, fontSize: '0.75rem' }}>TOTAL HOURS</th>
+                                <th rowSpan={2} style={{ padding: '12px 10px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#f8f9fa', color: '#475569', fontWeight: 700, fontSize: '0.75rem' }}>TOTAL CYCLES</th>
+
+                                {selectedThrusts.length > 0 && (
+                                    <th colSpan={selectedThrusts.length} style={{ padding: '8px 10px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#ffffff', color: '#7c3aed', fontWeight: 800, fontSize: '0.8rem' }}>
+                                        TOTAL CYCLES (USED)
+                                    </th>
+                                )}
+
+                                {selectedThrusts.map(rating => (
+                                    <th key={rating} colSpan={2} style={{ padding: '8px 10px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#3b82f6', color: 'white', fontWeight: 800, fontSize: '0.8rem' }}>
+                                        CYCLE {rating}
+                                    </th>
+                                ))}
+
+                                <th rowSpan={2} style={{ padding: '12px 10px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#f8f9fa', color: '#475569', fontWeight: 700, fontSize: '0.75rem' }}>CYCLE USED %</th>
+                                <th rowSpan={2} style={{ padding: '12px 10px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#f8f9fa', color: '#475569', fontWeight: 700, fontSize: '0.75rem' }}>DOCS</th>
+                                <th rowSpan={2} style={{ padding: '12px 10px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#f8f9fa', color: '#475569', fontWeight: 700, fontSize: '0.75rem' }}>REVIEW WORKFLOW</th>
+                                <th rowSpan={2} style={{ padding: '12px 10px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#f8f9fa', color: '#475569', fontWeight: 700, fontSize: '0.75rem' }}>RAISE DISCREPANCY</th>
+                            </tr>
+                            {/* Row 2 */}
+                            <tr>
+                                {selectedThrusts.map(rating => (
+                                    <th key={`used-${rating}`} style={{ padding: '8px 4px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#3b82f6', color: 'white', fontSize: '0.7rem', fontWeight: 800, minWidth: '60px' }}>
+                                        {rating}
+                                    </th>
+                                ))}
+                                {selectedThrusts.map(rating => (
+                                    <React.Fragment key={`cycle-sub-${rating}`}>
+                                        <th style={{ padding: '8px 4px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#dbeafe', color: '#1e40af', fontSize: '0.65rem', fontWeight: 800, minWidth: '50px' }}>LIMIT</th>
+                                        <th style={{ padding: '8px 4px', border: '1px solid #e2e8f0', textAlign: 'center', background: '#f1f5f9', color: '#1e293b', fontSize: '0.65rem', fontWeight: 800, minWidth: '50px' }}>REM</th>
+                                    </React.Fragment>
+                                ))}
                             </tr>
                         </thead>
                         <tbody>
                             {llpData.length === 0 ? (
                                 <tr>
-                                    <td colSpan={10} style={{ padding: '3rem', textAlign: 'center', color: '#94a3b8', fontStyle: 'italic' }}>
+                                    <td colSpan={10 + (selectedThrusts.length * 3)} style={{ padding: '3rem', textAlign: 'center', color: '#94a3b8', fontStyle: 'italic' }}>
                                         No data records found in the database for this engine.
                                     </td>
                                 </tr>
@@ -389,56 +461,106 @@ function LLPTable({ engineId, segData }) {
                                     <React.Fragment key={groupName}>
                                         {groupName && groupName !== "EXTRACTED DATA" && (
                                             <tr>
-                                                <td colSpan={10} style={{ padding: '10px 14px', background: '#1e293b', color: 'white', fontWeight: 700, letterSpacing: '0.5px' }}>
+                                                <td colSpan={10 + (selectedThrusts.length * 3)} style={{ padding: '10px 14px', background: '#1e293b', color: 'white', fontWeight: 700, letterSpacing: '0.5px' }}>
                                                     {groupName}
                                                 </td>
                                             </tr>
                                         )}
                                         {rows.map(row => {
-                                            const ratingToUse = "7B24"; // Defaulting since highlight logic is removed
-                                            const limit = row.cycle_limits_dict?.[ratingToUse] || 0;
-                                            const used = row.cycles_used_dict?.[ratingToUse] || 0;
-                                            const cycleUsedPercent = limit > 0 ? ((used / limit) * 100).toFixed(2) : "0.00";
                                             const workflowStyle = getWorkflowColor(row.review_workflow);
 
+                                            // Calculate usage % based on first selected rating or a primary one
+                                            const primaryRating = selectedThrusts[0] || "7B24";
+                                            const pLimit = row.cycle_limits_dict?.[primaryRating] || 0;
+                                            const pUsed = row.cycles_used_dict?.[primaryRating] || 0;
+                                            const cycleUsedPercent = pLimit > 0 ? ((pUsed / pLimit) * 100).toFixed(2) : "0.00";
+
                                             return (
-                                                <tr key={row.id || row._tempId} style={{ borderBottom: '1px solid #eee' }} onMouseEnter={e => e.currentTarget.style.background = '#fafafa'} onMouseLeave={e => e.currentTarget.style.background = 'white'}>
-                                                    <td style={{ padding: '12px 10px', textAlign: 'center' }}>{row.sr_no}</td>
-                                                    <td style={{ padding: '12px 10px', fontWeight: 500, color: '#334155' }}>
-                                                        {row.description}
-                                                        {isEditing && (
-                                                            <div style={{ marginTop: '5px', display: 'flex', gap: '5px', fontSize: '0.7rem' }}>
-                                                                <input placeholder="Lim" type="number" value={limit} onChange={e => handleJsonbChange(row.id, 'cycle_limits_dict', ratingToUse, e.target.value)} style={{ width: '40px', padding: '2px' }} title="Limit for this thrust" />
-                                                                <input placeholder="Used" type="number" value={used} onChange={e => handleJsonbChange(row.id, 'cycles_used_dict', ratingToUse, e.target.value)} style={{ width: '40px', padding: '2px' }} title="Used for this thrust" />
-                                                            </div>
+                                                <tr key={row.id || row._tempId} style={{ borderBottom: '1px solid #e2e8f0' }} onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.background = 'white'}>
+                                                    <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9' }}>{row.sr_no}</td>
+                                                    <td style={{ padding: '10px', fontWeight: 500, color: '#334155', border: '1px solid #f1f5f9' }}>
+                                                        {isEditing ? (
+                                                            <input
+                                                                value={row.description || ''}
+                                                                onChange={e => handleInputChange(row.id, 'description', e.target.value)}
+                                                                style={{ width: '100%', padding: '6px', border: '1px solid #cbd5e1', borderRadius: '4px', fontSize: '0.8rem' }}
+                                                            />
+                                                        ) : (
+                                                            row.description
                                                         )}
                                                     </td>
-                                                    <td style={{ padding: '12px 10px', textAlign: 'center', fontFamily: 'monospace', color: '#64748b' }}>
-                                                        {isEditing ? <input value={row.part_number || ''} onChange={e => handleInputChange(row.id, 'part_number', e.target.value)} style={{ width: '100%', padding: '4px' }} /> : (row.part_number || '-')}
+                                                    <td style={{ padding: '10px', textAlign: 'center', fontFamily: 'monospace', color: '#64748b', border: '1px solid #f1f5f9' }}>
+                                                        {isEditing ? <input value={row.part_number || ''} onChange={e => handleInputChange(row.id, 'part_number', e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #cbd5e1', borderRadius: '4px', textAlign: 'center' }} /> : (row.part_number || '-')}
                                                     </td>
-                                                    <td style={{ padding: '12px 10px', textAlign: 'center', fontFamily: 'monospace', color: '#64748b' }}>
-                                                        {isEditing ? <input value={row.serial_number || ''} onChange={e => handleInputChange(row.id, 'serial_number', e.target.value)} style={{ width: '100%', padding: '4px' }} /> : (row.serial_number || '-')}
+                                                    <td style={{ padding: '10px', textAlign: 'center', fontFamily: 'monospace', color: '#64748b', border: '1px solid #f1f5f9' }}>
+                                                        {isEditing ? <input value={row.serial_number || ''} onChange={e => handleInputChange(row.id, 'serial_number', e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #cbd5e1', borderRadius: '4px', textAlign: 'center' }} /> : (row.serial_number || '-')}
                                                     </td>
-                                                    <td style={{ padding: '12px 10px', textAlign: 'center' }}>
-                                                        {isEditing ? <input type="number" value={row.total_hours} onChange={e => handleInputChange(row.id, 'total_hours', parseFloat(e.target.value) || 0)} style={{ width: '60px', padding: '4px', textAlign: 'center' }} /> : row.total_hours}
+                                                    <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9' }}>
+                                                        {isEditing ? <input type="number" value={row.total_hours} onChange={e => handleInputChange(row.id, 'total_hours', parseFloat(e.target.value) || 0)} style={{ width: '70px', padding: '6px', border: '1px solid #cbd5e1', borderRadius: '4px', textAlign: 'center' }} /> : row.total_hours}
                                                     </td>
-                                                    <td style={{ padding: '12px 10px', textAlign: 'center' }}>
-                                                        {isEditing ? <input type="number" value={row.total_cycles} onChange={e => handleInputChange(row.id, 'total_cycles', parseFloat(e.target.value) || 0)} style={{ width: '60px', padding: '4px', textAlign: 'center' }} /> : row.total_cycles}
+                                                    <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9' }}>
+                                                        {isEditing ? <input type="number" value={row.total_cycles} onChange={e => handleInputChange(row.id, 'total_cycles', parseFloat(e.target.value) || 0)} style={{ width: '70px', padding: '6px', border: '1px solid #cbd5e1', borderRadius: '4px', textAlign: 'center' }} /> : row.total_cycles}
                                                     </td>
-                                                    <td style={{ padding: '12px 10px', textAlign: 'center', fontWeight: 700, color: '#1e293b' }}>
+
+                                                    {/* USED columns */}
+                                                    {selectedThrusts.map(rating => {
+                                                        const used = row.cycles_used_dict?.[rating] || 0;
+                                                        return (
+                                                            <td key={`val-used-${rating}`} style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9', background: '#f5f3ff' }}>
+                                                                {isEditing ? (
+                                                                    <input
+                                                                        type="number"
+                                                                        value={used}
+                                                                        onChange={e => handleJsonbChange(row.id, 'cycles_used_dict', rating, e.target.value)}
+                                                                        style={{ width: '50px', padding: '4px', border: '1px solid #cbd5e1', borderRadius: '4px', textAlign: 'center', fontWeight: 700, color: '#6d28d9' }}
+                                                                    />
+                                                                ) : (
+                                                                    <span style={{ fontWeight: 700, color: '#6d28d9' }}>{used}</span>
+                                                                )}
+                                                            </td>
+                                                        );
+                                                    })}
+
+                                                    {/* LIMIT & REM columns */}
+                                                    {selectedThrusts.map(rating => {
+                                                        const limit = row.cycle_limits_dict?.[rating] || 0;
+                                                        const used = row.cycles_used_dict?.[rating] || 0;
+                                                        const rem = limit - used;
+                                                        return (
+                                                            <React.Fragment key={`val-cycle-${rating}`}>
+                                                                <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9', background: '#f0f9ff' }}>
+                                                                    {isEditing ? (
+                                                                        <input
+                                                                            type="number"
+                                                                            value={limit}
+                                                                            onChange={e => handleJsonbChange(row.id, 'cycle_limits_dict', rating, e.target.value)}
+                                                                            style={{ width: '50px', padding: '4px', border: '1px solid #cbd5e1', borderRadius: '4px', textAlign: 'center', color: '#0369a1' }}
+                                                                        />
+                                                                    ) : (
+                                                                        <span style={{ color: '#0369a1' }}>{limit}</span>
+                                                                    )}
+                                                                </td>
+                                                                <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9', fontWeight: 800, color: '#1e293b' }}>
+                                                                    {rem}
+                                                                </td>
+                                                            </React.Fragment>
+                                                        );
+                                                    })}
+
+                                                    <td style={{ padding: '10px', textAlign: 'center', fontWeight: 800, color: '#1e293b', border: '1px solid #f1f5f9' }}>
                                                         {cycleUsedPercent}%
                                                     </td>
-                                                    <td style={{ padding: '12px 10px', textAlign: 'center' }}>
-                                                        <button style={{ background: 'transparent', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', color: '#94a3b8' }}>
+                                                    <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9' }}>
+                                                        <button style={{ background: 'transparent', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '6px', cursor: 'pointer', color: '#94a3b8' }}>
                                                             <Eye size={16} />
                                                         </button>
                                                     </td>
-                                                    <td style={{ padding: '12px 10px', textAlign: 'center' }}>
+                                                    <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9' }}>
                                                         {isEditing ? (
                                                             <select
                                                                 value={row.review_workflow}
                                                                 onChange={e => handleInputChange(row.id, 'review_workflow', e.target.value)}
-                                                                style={{ padding: '4px 8px', borderRadius: '16px', border: '1px solid #cbd5e1', fontSize: '0.75rem', fontWeight: 600, outline: 'none' }}
+                                                                style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.75rem', fontWeight: 600, outline: 'none' }}
                                                             >
                                                                 <option value="Pending">Pending</option>
                                                                 <option value="Review">Review</option>
@@ -454,12 +576,13 @@ function LLPTable({ engineId, segData }) {
                                                             </span>
                                                         )}
                                                     </td>
-                                                    <td style={{ padding: '12px 10px', textAlign: 'center' }}>
+                                                    <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9' }}>
                                                         <input
                                                             type="checkbox"
                                                             checked={row.raise_discrepancy}
                                                             disabled={!isEditing}
                                                             onChange={e => handleInputChange(row.id, 'raise_discrepancy', e.target.checked)}
+                                                            style={{ transform: 'scale(1.2)', cursor: isEditing ? 'pointer' : 'default' }}
                                                         />
                                                     </td>
                                                 </tr>
