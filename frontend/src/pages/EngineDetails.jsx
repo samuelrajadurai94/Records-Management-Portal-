@@ -201,53 +201,62 @@ function LLPTable({ engineId, segData }) {
     const applyMetadataToLlpData = async (file) => {
         setMetaStatus(null);
         setLoading(true);
-        console.log("Loading exact metadata from file:", file.box_file_name, file.metadata_json);
-
-        let meta = file.metadata_json;
-        if (typeof meta === 'string') {
-            try {
-                meta = JSON.parse(meta);
-            } catch (e) {
-                console.error("Failed to parse metadata_json string", e);
-                setMetaStatus({ type: 'error', message: "Invalid metadata format in file." });
-                return;
-            }
-        }
-
-        const metaRecords = meta.components || meta.records;
-
-        if (!meta || !metaRecords || metaRecords.length === 0) {
-            console.warn("No metadata records found in file.");
-            setMetaStatus({ type: 'info', message: "No components found in this file's metadata." });
-            return;
-        }
-
-        const exactRows = metaRecords.map((m, idx) => ({
-            part_group: "EXTRACTED DATA",
-            sr_no: idx + 1,
-            description: m.component_description || m.description || "Unknown Component",
-            part_number: String(m.part_number || ""),
-            serial_number: String(m.serial_number || "")
-        }));
-
         try {
+            console.log("Loading exact metadata from file:", file.box_file_name, file.metadata_json);
+
+            let meta = file.metadata_json;
+            if (typeof meta === 'string') {
+                try {
+                    meta = JSON.parse(meta);
+                } catch (e) {
+                    console.error("Failed to parse metadata_json string", e);
+                    setMetaStatus({ type: 'error', message: "Invalid metadata format in file." });
+                    // Even if parse fails, we should still try to save the file selection below
+                    meta = {};
+                }
+            }
+
+            const metaRecords = (meta && (meta.components || meta.records)) || [];
+            let exactRows = [];
+
+            if (metaRecords.length > 0) {
+                exactRows = metaRecords.map((m, idx) => ({
+                    part_group: "EXTRACTED DATA",
+                    sr_no: idx + 1,
+                    description: m.component_description || m.description || "Unknown Component",
+                    part_number: String(m.part_number || ""),
+                    serial_number: String(m.serial_number || "")
+                }));
+                setMetaStatus({
+                    type: 'success',
+                    message: `Extracted ${exactRows.length} items from ${file.box_file_name}. Saving to database...`
+                });
+            } else {
+                console.warn("No metadata records found in file.");
+                setMetaStatus({ type: 'info', message: "File selected, but no components found in metadata to auto-populate." });
+            }
+
             const payload = {
-                records: exactRows,
+                // If we found new rows, use them. Otherwise keep existing (or empty).
+                records: exactRows.length > 0 ? exactRows : llpData,
                 selected_llp_file_id: file.id ? String(file.id) : null
             };
-            // Send to backend immediately
+
+            // Send to backend immediately to persist file selection and any records
             await api.put(`/engines/${engineId}/llp-records`, payload);
 
             // Re-fetch to normalize and show preserved data
             await fetchLLPData();
 
-            setMetaStatus({
-                type: 'success',
-                message: `Extracted and saved ${exactRows.length} items from ${file.box_file_name} directly to the database.`
-            });
+            if (exactRows.length > 0) {
+                setMetaStatus({
+                    type: 'success',
+                    message: `Extracted and saved ${exactRows.length} items from ${file.box_file_name} directly to the database.`
+                });
+            }
         } catch (err) {
             console.error("Failed to auto-save metadata", err);
-            setMetaStatus({ type: 'error', message: "Failed to save extracted metadata to database." });
+            setMetaStatus({ type: 'error', message: "Failed to save data. Please try again." });
         } finally {
             setLoading(false);
         }
