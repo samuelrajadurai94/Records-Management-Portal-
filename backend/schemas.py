@@ -33,6 +33,7 @@ class EngineBase(BaseModel):
     serial_number: str
     csn_value: Optional[int] = 0
     selected_llp_file_id: Optional[str] = None
+    selected_thrust_ratings: Optional[List[str]] = []
 
 class EngineCreate(EngineBase):
     pass
@@ -87,13 +88,16 @@ class LLPRecordBase(BaseModel):
     total_cycles: Optional[float] = 0.0
     cycles_used_dict: Optional[dict] = {}
     cycle_limits_dict: Optional[dict] = {}
+    cycles_remain_dict: Optional[dict] = {}
     docs: Optional[str] = ""
     review_workflow: Optional[str] = "Pending"
     raise_discrepancy: Optional[bool] = False
+    engine_id: Optional[int] = None
 
-    class Config:
-        from_attributes = True
-        extra = "ignore"
+    model_config = {
+        "from_attributes": True,
+        "extra": "ignore"
+    }
 
 class LLPRecordCreate(LLPRecordBase):
     pass
@@ -111,10 +115,13 @@ class LLPRecordResponse(LLPRecordBase):
 class LLPFetchResponse(BaseModel):
     records: List[LLPRecordResponse]
     selected_llp_file_id: Optional[str] = None
+    selected_thrust_ratings: Optional[List[str]] = []
 
 class LLPBulkUpdateRequest(BaseModel):
     records: List[LLPRecordUpdate]
     selected_llp_file_id: Optional[str] = None
+    selected_thrust_ratings: Optional[List[str]] = []
 
-    class Config:
-        extra = "ignore"
+    model_config = {
+        "extra": "ignore"
+    }

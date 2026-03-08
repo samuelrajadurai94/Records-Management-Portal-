@@ -44,7 +44,8 @@ def get_llp_records(engine_id: int, db: Session = Depends(database.get_db)):
 
     return {
         "records": records,
-        "selected_llp_file_id": engine.selected_llp_file_id
+        "selected_llp_file_id": engine.selected_llp_file_id,
+        "selected_thrust_ratings": engine.selected_thrust_ratings or []
     }
 
 @router.put("", response_model=schemas.LLPFetchResponse)
@@ -53,8 +54,9 @@ def update_llp_records(engine_id: int, request: schemas.LLPBulkUpdateRequest, db
     if not engine:
         raise HTTPException(status_code=404, detail="Engine not found")
 
-    # Update selected file ID in Engine table
+    # Update Engine metadata
     engine.selected_llp_file_id = request.selected_llp_file_id
+    engine.selected_thrust_ratings = request.selected_thrust_ratings
 
     # Sync approach: Update given, Create missing, Delete omitted
     existing_records = db.query(models.LLPRecord).filter(models.LLPRecord.engine_id == engine_id).all()
@@ -98,5 +100,6 @@ def update_llp_records(engine_id: int, request: schemas.LLPBulkUpdateRequest, db
         
     return {
         "records": updated_records,
-        "selected_llp_file_id": engine.selected_llp_file_id
+        "selected_llp_file_id": engine.selected_llp_file_id,
+        "selected_thrust_ratings": engine.selected_thrust_ratings or []
     }

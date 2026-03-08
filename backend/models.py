@@ -28,6 +28,7 @@ class Engine(Base):
     box_folder_id = Column(String, nullable=True)
     csn_value = Column(Integer, default=0)
     selected_llp_file_id = Column(String, nullable=True) # Persists the file used for LLP Status
+    selected_thrust_ratings = Column(JSONB, server_default=text("'[]'::jsonb"), nullable=True)
 
     owner = relationship("User", back_populates="engines")
     files = relationship("FileMetadata", back_populates="engine")
@@ -92,5 +93,7 @@ class LLPRecord(Base):
     docs = Column(String, default="")
     review_workflow = Column(String, default="Pending")
     raise_discrepancy = Column(Boolean, default=False)
+    cycles_remain_dict = Column(JSONB, server_default=text("'{}'::jsonb"), nullable=True)
+
     
     engine = relationship("Engine", back_populates="llp_records")

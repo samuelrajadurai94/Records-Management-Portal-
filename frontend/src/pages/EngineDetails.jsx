@@ -115,7 +115,7 @@ function LLPTable({ engineId, segData }) {
     const [savedFileId, setSavedFileId] = useState(null); // ID from backend
 
     // Dropdown States
-    const [selectedThrusts, setSelectedThrusts] = useState(["7B20", "7B24"]);
+    const [selectedThrusts, setSelectedThrusts] = useState([]);
 
     const [showThrustDropdown, setShowThrustDropdown] = useState(false);
     const [metaStatus, setMetaStatus] = useState(null); // { type: 'success'|'error'|'info', message: string }
@@ -131,6 +131,9 @@ function LLPTable({ engineId, segData }) {
             // res.data is now { records: [], selected_llp_file_id: string }
             setLlpData(res.data.records || []);
             setSavedFileId(res.data.selected_llp_file_id);
+            if (res.data.selected_thrust_ratings && res.data.selected_thrust_ratings.length > 0) {
+                setSelectedThrusts(res.data.selected_thrust_ratings);
+            }
         } catch (err) {
             console.error("Failed to fetch LLP records", err);
         } finally {
@@ -157,7 +160,8 @@ function LLPTable({ engineId, segData }) {
         try {
             const payload = {
                 records: llpData,
-                selected_llp_file_id: selectedLlpFile?.id || null
+                selected_llp_file_id: selectedLlpFile?.id ? String(selectedLlpFile.id) : (savedFileId || null),
+                selected_thrust_ratings: selectedThrusts
             };
             await api.put(`/engines/${engineId}/llp-records`, payload);
             setIsEditing(false);
@@ -178,8 +182,46 @@ function LLPTable({ engineId, segData }) {
     const handleJsonbChange = (recordId, field, thrustKey, value) => {
         setLlpData(prev => prev.map(row => {
             if (row.id === recordId) {
-                const updatedDict = { ...row[field], [thrustKey]: parseFloat(value) || 0 };
-                return { ...row, [field]: updatedDict };
+                const newValue = parseFloat(value) || 0;
+
+                // Get updated dictionaries
+                const updatedUsedDict = field === 'cycles_used_dict'
+                    ? { ...row.cycles_used_dict, [thrustKey]: newValue }
+                    : { ...row.cycles_used_dict };
+
+                const updatedLimitDict = field === 'cycle_limits_dict'
+                    ? { ...row.cycle_limits_dict, [thrustKey]: newValue }
+                    : { ...row.cycle_limits_dict };
+
+                // Calculate Total Usage Factor: SUM(Used_i / Limit_i) across all possible ratings
+                let totalUsageSum = 0;
+                THRUST_RATINGS.forEach(rating => {
+                    const u = updatedUsedDict[rating] || 0;
+                    const l = updatedLimitDict[rating] || 0;
+                    if (l > 0) {
+                        totalUsageSum += (u / l);
+                    }
+                });
+
+                // Calculate Remaining Cycles for each rating: (1 - TotalUsageSum) * Limit_k
+                let updatedRemainDict = {};
+                THRUST_RATINGS.forEach(rating => {
+                    const l = updatedLimitDict[rating] || 0;
+                    const rem = (1 - totalUsageSum) * l;
+                    // Store as rounded integer as seen in reference image
+                    updatedRemainDict[rating] = Math.round(rem);
+                });
+
+                // Calculate Total Cycles: SUM of all used cycles
+                const totalUsedCycles = Object.values(updatedUsedDict).reduce((sm, val) => sm + (parseFloat(val) || 0), 0);
+
+                return {
+                    ...row,
+                    cycles_used_dict: updatedUsedDict,
+                    cycle_limits_dict: updatedLimitDict,
+                    cycles_remain_dict: updatedRemainDict,
+                    total_cycles: totalUsedCycles
+                };
             }
             return row;
         }));
@@ -239,7 +281,8 @@ function LLPTable({ engineId, segData }) {
             const payload = {
                 // If we found new rows, use them. Otherwise keep existing (or empty).
                 records: exactRows.length > 0 ? exactRows : llpData,
-                selected_llp_file_id: file.id ? String(file.id) : null
+                selected_llp_file_id: file.id ? String(file.id) : null,
+                selected_thrust_ratings: selectedThrusts
             };
 
             // Send to backend immediately to persist file selection and any records
@@ -469,11 +512,16 @@ function LLPTable({ engineId, segData }) {
                                         {rows.map(row => {
                                             const workflowStyle = getWorkflowColor(row.review_workflow);
 
-                                            // Calculate usage % based on first selected rating or a primary one
-                                            const primaryRating = selectedThrusts[0] || "7B24";
-                                            const pLimit = row.cycle_limits_dict?.[primaryRating] || 0;
-                                            const pUsed = row.cycles_used_dict?.[primaryRating] || 0;
-                                            const cycleUsedPercent = pLimit > 0 ? ((pUsed / pLimit) * 100).toFixed(2) : "0.00";
+                                            // Calculate usage % based on pro-rata sum across all thrust ratings
+                                            let totalUsageSum = 0;
+                                            THRUST_RATINGS.forEach(rating => {
+                                                const u = row.cycles_used_dict?.[rating] || 0;
+                                                const l = row.cycle_limits_dict?.[rating] || 0;
+                                                if (l > 0) {
+                                                    totalUsageSum += (u / l);
+                                                }
+                                            });
+                                            const cycleUsedPercent = (totalUsageSum * 100).toFixed(2);
 
                                             return (
                                                 <tr key={row.id || row._tempId} style={{ borderBottom: '1px solid #e2e8f0' }} onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.background = 'white'}>
@@ -498,8 +546,8 @@ function LLPTable({ engineId, segData }) {
                                                     <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9' }}>
                                                         {isEditing ? <input type="number" value={row.total_hours} onChange={e => handleInputChange(row.id, 'total_hours', parseFloat(e.target.value) || 0)} style={{ width: '70px', padding: '6px', border: '1px solid #cbd5e1', borderRadius: '4px', textAlign: 'center' }} /> : row.total_hours}
                                                     </td>
-                                                    <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9' }}>
-                                                        {isEditing ? <input type="number" value={row.total_cycles} onChange={e => handleInputChange(row.id, 'total_cycles', parseFloat(e.target.value) || 0)} style={{ width: '70px', padding: '6px', border: '1px solid #cbd5e1', borderRadius: '4px', textAlign: 'center' }} /> : row.total_cycles}
+                                                    <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9', fontWeight: 600, color: '#334155' }}>
+                                                        {row.total_cycles || 0}
                                                     </td>
 
                                                     {/* USED columns */}
@@ -524,8 +572,7 @@ function LLPTable({ engineId, segData }) {
                                                     {/* LIMIT & REM columns */}
                                                     {selectedThrusts.map(rating => {
                                                         const limit = row.cycle_limits_dict?.[rating] || 0;
-                                                        const used = row.cycles_used_dict?.[rating] || 0;
-                                                        const rem = limit - used;
+                                                        const rem = row.cycles_remain_dict?.[rating] || 0;
                                                         return (
                                                             <React.Fragment key={`val-cycle-${rating}`}>
                                                                 <td style={{ padding: '10px', textAlign: 'center', border: '1px solid #f1f5f9', background: '#f0f9ff' }}>
