@@ -5,6 +5,7 @@ from io import BytesIO
 from box_sdk_gen import BoxClient, BoxJWTAuth, JWTConfig
 from box_sdk_gen.managers.uploads import UploadFileAttributes, UploadFileAttributesParentField
 from box_sdk_gen.managers.folders import CreateFolderParent
+import time
 
 # Constants
 CHUNKED_UPLOAD_MINIMUM = 50 * 1024 * 1024  # 50MB
@@ -37,6 +38,7 @@ class BoxService:
         file_size = os.path.getsize(file_path)
         
         try:
+            print("entered into chunked upload")
             session = self.client.chunked_uploads.create_file_upload_session(
                 parent_folder_id, file_size, file_name
             )
@@ -473,14 +475,15 @@ class BoxService:
                 boxapi=boxapi_header
             )
             print(f"Shared Folder: {shared_folder.id} - {shared_folder.name}")
-
+            
             # Step 2: Copy to root folder ("GEM REC PORTAL")
             copied_folder = self.client.folders.copy_folder(
                 folder_id=shared_folder.id,
                 parent={"id":"359797132460"}
             )
             print(f"copied to box root folder: {copied_folder.id}")
-
+            #return copied_folder.id
+            time.sleep(900)
             # Step 3: Move it to your desired subfolder
 
             moved_folder = self.client.folders.update_folder_by_id(
@@ -488,10 +491,13 @@ class BoxService:
                 parent={"id": dest_parent_id}
             )
             print(f"Moved to subfolder: {moved_folder.id}")
-            return moved_folder.id
+            return moved_folder.id  
+
         except Exception as e:
             print(f"Error importing from shared link: {e}")
             return None
+
+  
 
 
     

@@ -102,7 +102,7 @@ export default function Dashboard() {
 
                 // 3. Parallel Upload
                 setUploadStage('Uploading files to Box...');
-                const CONCURRENCY = 5; // Upload 5 files at a time
+                const CONCURRENCY = 1; // Upload 2 files at a time (reduced to prevent Box API rate limiting)
                 let activeWorkers = 0;
                 let currentIndex = 0;
                 let completed = 0;
