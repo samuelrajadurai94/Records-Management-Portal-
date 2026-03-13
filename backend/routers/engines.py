@@ -147,22 +147,43 @@ def upload_single_file(
     if box_folder_id == "undefined":
         raise HTTPException(status_code=400, detail="Invalid target folder ID (undefined). Please ensure the backend server has been restarted to load recent folder mapping fixes.")
 
-    temp_dir = tempfile.mkdtemp(prefix=f"engine_single_upload_")
-    file_path = os.path.join(temp_dir, file.filename)
-    
+    # Sanitize filename — strip any path separators to prevent path traversal
+    # and avoid os.makedirs("") crash when filename has no directory component
+    safe_filename = os.path.basename(file.filename or "unnamed_file") or "unnamed_file"
+    temp_dir = tempfile.mkdtemp(prefix="engine_single_upload_")
+    file_path = os.path.join(temp_dir, safe_filename)
+
+    print(f"[upload-single-file] Receiving: {safe_filename} → box_folder: {box_folder_id}")
+
     try:
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        # Save uploaded file to temp disk
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-            
+
+        file_size = os.path.getsize(file_path)
+        print(f"[upload-single-file] Saved to disk: {safe_filename} ({file_size} bytes)")
+
+        # Upload to Box
         result = box_service.upload_file(box_folder_id, file_path)
         if not result:
-            raise HTTPException(status_code=500, detail="Failed to upload file to Box")
-            
-        return {"status": "success", "filename": file.filename}
+            print(f"[upload-single-file] Box upload returned None for: {safe_filename}")
+            raise HTTPException(status_code=500, detail=f"Box upload failed for file: {safe_filename}")
+
+        print(f"[upload-single-file] ✓ Uploaded to Box: {safe_filename}")
+        return {"status": "success", "filename": safe_filename}
+
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is (they produce proper 4xx/5xx responses)
+    except Exception as e:
+        # Catch ALL other exceptions and return 500 — never let them silently crash the worker
+        print(f"[upload-single-file] ✗ Unexpected error for {safe_filename}: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Unexpected error uploading {safe_filename}: {str(e)}")
     finally:
         if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 @router.post("/", response_model=schemas.Engine)
 async def create_engine(

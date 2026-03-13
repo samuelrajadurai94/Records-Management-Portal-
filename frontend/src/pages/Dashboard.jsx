@@ -100,89 +100,71 @@ export default function Dashboard() {
 
                 const { engine_id, folder_mapping } = initRes.data;
 
-                // 3. Parallel Upload
+                // 3. Sequential Upload — one file at a time, fully awaited
                 setUploadStage('Uploading files to Box...');
-                const CONCURRENCY = 1; // Upload 2 files at a time (reduced to prevent Box API rate limiting)
-                let activeWorkers = 0;
-                let currentIndex = 0;
+                const filesArray = Array.from(selectedFiles);
                 let completed = 0;
                 let errors = [];
 
-                const filesArray = Array.from(selectedFiles);
-
-                await new Promise((resolve) => {
-                    const processNext = async () => {
-                        if (currentIndex >= filesArray.length) {
-                            if (activeWorkers === 0) resolve();
-                            return;
+                for (const file of filesArray) {
+                    try {
+                        const relPath = file.webkitRelativePath || file.name;
+                        const parts = relPath.split('/');
+                        let semanticPath = "RAW FOLDER";
+                        // parts[0] = root folder name on disk (stripped)
+                        // parts[last] = file name
+                        // Everything in between = subfolder path
+                        if (parts.length > 2) {
+                            semanticPath = parts.slice(1, -1).join('/');
                         }
 
-                        const file = filesArray[currentIndex++];
-                        activeWorkers++;
-                        processNext(); // spawn next if possible up to concurrency
+                        const targetFolderId = folder_mapping[semanticPath] || folder_mapping["RAW FOLDER"];
 
-                        try {
-                            const relPath = file.webkitRelativePath || file.name;
-                            const parts = relPath.split('/');
-                            let semanticPath = "RAW FOLDER";
-                            // parts[0] is typically the root folder name on the user's disk
-                            // parts[last] is the file name
-                            // Everything in between is the subfolder path
-                            if (parts.length > 2) {
-                                const folderPath = parts.slice(1, -1).join('/');
-                                semanticPath = folderPath;
-                            }
+                        if (!targetFolderId) {
+                            throw new Error(`Could not resolve Box folder ID for path: ${semanticPath}`);
+                        }
 
-                            const targetFolderId = folder_mapping[semanticPath] || folder_mapping["RAW FOLDER"];
+                        const fd = new FormData();
+                        fd.append('box_folder_id', targetFolderId);
+                        fd.append('file', file);
 
-                            if (!targetFolderId) {
-                                throw new Error(`Could not resolve Box folder ID for path: ${semanticPath}`);
-                            }
+                        let retries = 3;
+                        let success = false;
+                        let lastErr = null;
 
-                            const fd = new FormData();
-                            fd.append('box_folder_id', targetFolderId);
-                            fd.append('file', file);
-
-                            let retries = 3;
-                            let success = false;
-                            let lastErr = null;
-
-                            while (retries > 0 && !success) {
-                                try {
-                                    await api.post(`/engines/${engine_id}/upload-single-file`, fd);
-                                    success = true;
-                                } catch (e) {
-                                    lastErr = e;
-                                    retries--;
-                                    if (retries > 0) {
-                                        // Wait 2 seconds before retrying to allow network to clear
-                                        await new Promise(r => setTimeout(r, 2000));
-                                    }
+                        while (retries > 0 && !success) {
+                            try {
+                                await api.post(`/engines/${engine_id}/upload-single-file`, fd, {
+                                    timeout: 1800000, // 30 min timeout for large files via Box chunked upload
+                                });
+                                success = true;
+                            } catch (e) {
+                                lastErr = e;
+                                retries--;
+                                if (retries > 0) {
+                                    // Exponential backoff: 3s → 6s → 12s
+                                    const waitMs = (4 - retries) * 3000;
+                                    console.warn(`Retrying ${file.name} in ${waitMs / 1000}s... (${retries} left)`);
+                                    await new Promise(r => setTimeout(r, waitMs));
                                 }
                             }
-
-                            if (!success) {
-                                throw lastErr || new Error("Upload failed after 3 network attempts");
-                            }
-
-                            completed++;
-
-                            setUploadFilesCompleted(completed);
-                            setUploadProgress(5 + Math.floor((completed / filesArray.length) * 95));
-                        } catch (err) {
-                            errors.push(`${file.name}: ${err.message}`);
-                            setUploadErrors([...errors]);
-                            console.error(`Error uploading ${file.name}:`, err);
-                        } finally {
-                            activeWorkers--;
-                            processNext();
                         }
-                    };
 
-                    for (let i = 0; i < Math.min(CONCURRENCY, filesArray.length); i++) {
-                        processNext();
+                        if (!success) {
+                            throw lastErr || new Error("Upload failed after 3 attempts");
+                        }
+
+                        completed++;
+                        setUploadFilesCompleted(completed);
+                        setUploadProgress(5 + Math.floor((completed / filesArray.length) * 95));
+
+                    } catch (err) {
+                        errors.push(`${file.name}: ${err.message}`);
+                        setUploadErrors([...errors]);
+                        console.error(`Error uploading ${file.name}:`, err);
                     }
-                });
+                }
+
 
                 // Done
                 setUploadSummary({

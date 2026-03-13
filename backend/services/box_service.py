@@ -3,7 +3,7 @@ import hashlib
 import base64
 from io import BytesIO
 from box_sdk_gen import BoxClient, BoxJWTAuth, JWTConfig
-from box_sdk_gen.managers.uploads import UploadFileAttributes, UploadFileAttributesParentField
+from box_sdk_gen.managers.uploads import UploadFileAttributes, UploadFileAttributesParentField, UploadFileVersionAttributes
 from box_sdk_gen.managers.folders import CreateFolderParent
 import time
 
@@ -75,13 +75,28 @@ class BoxService:
             print(f"Error in chunked upload for {file_name}: {e}")
             return None
 
+    def get_existing_file_id(self, parent_folder_id, file_name):
+        """Find an existing file's ID by name within a folder (paginates all pages)."""
+        offset = 0
+        limit = 100
+        while True:
+            page = self.client.folders.get_folder_items(parent_folder_id, limit=limit, offset=offset)
+            for item in page.entries:
+                if item.type == "file" and item.name == file_name:
+                    return item.id
+            if len(page.entries) < limit:
+                break
+            offset += limit
+        return None
+
     def upload_file(self, parent_folder_id, file_path):
-        """Upload file - uses direct or chunked based on size"""
+        """Upload file - uses direct or chunked based on size.
+        If a file with the same name already exists in Box, uploads as a new version (v2, v3...)."""
         if not self.client: return None
 
         file_name = os.path.basename(file_path)
         file_size = os.path.getsize(file_path)
-        
+
         try:
             if file_size >= CHUNKED_UPLOAD_MINIMUM:
                 print(f"Chunked upload: {file_name}")
@@ -89,13 +104,31 @@ class BoxService:
             else:
                 print(f"Direct upload: {file_name}")
                 with open(file_path, 'rb') as file_stream:
-                    return self.client.uploads.upload_file(
-                        UploadFileAttributes(
-                            name=file_name,
-                            parent=UploadFileAttributesParentField(id=parent_folder_id)
-                        ),
-                        file_stream
-                    )
+                    try:
+                        return self.client.uploads.upload_file(
+                            UploadFileAttributes(
+                                name=file_name,
+                                parent=UploadFileAttributesParentField(id=parent_folder_id)
+                            ),
+                            file_stream
+                        )
+                    except Exception as upload_err:
+                        err_str = str(upload_err).lower()
+                        # 409 conflict = file already exists → upload as new version instead
+                        if "409" in err_str or "item_name_in_use" in err_str or "conflict" in err_str:
+                            print(f"File '{file_name}' already exists — uploading as new version")
+                            existing_id = self.get_existing_file_id(parent_folder_id, file_name)
+                            if existing_id:
+                                with open(file_path, 'rb') as version_stream:
+                                    return self.client.uploads.upload_file_version(
+                                        existing_id,
+                                        UploadFileVersionAttributes(name=file_name),
+                                        version_stream
+                                    )
+                            else:
+                                print(f"Could not find existing file ID for '{file_name}' to version")
+                                raise
+                        raise
         except Exception as e:
             print(f"Error uploading file {file_name}: {e}")
             return None
@@ -129,38 +162,47 @@ class BoxService:
                     progress_callback(progress, state)
 
             elif os.path.isdir(item_path):
-                try:
-                    subfolder = self.client.folders.create_folder(
-                        item,
-                        CreateFolderParent(id=parent_folder_id)
-                    )
-                    print(f"Created subfolder: {item}")
+                # Use get_or_create_folder so existing subfolders are reused, not skipped
+                subfolder = self.get_or_create_folder(item, parent_folder_id)
+                if subfolder:
+                    print(f"Using subfolder: {item} (ID: {subfolder.id})")
                     self.upload_folder_contents(subfolder.id, item_path, progress_callback, state)
-                except Exception as e:
-                    print(f"Could not create subfolder {item}: {e}")
-                    # Still increment counter for files inside the failed folder
+                else:
+                    print(f"Could not get or create subfolder {item} — skipping its contents")
                     for root, dirs, files in os.walk(item_path):
                         state["current"] += len(files)
                         for f in files:
                             rel = os.path.relpath(os.path.join(root, f))
-                            state["errors"].append(f"{rel}: subfolder creation failed — {e}")
+                            state["errors"].append(f"{rel}: subfolder unavailable — could not get or create '{item}'")
                     if progress_callback and state["total"] > 0:
                         progress = int((state["current"] / state["total"]) * 100)
                         progress_callback(progress, state)
 
     def get_or_create_folder(self, folder_name, parent_id):
-        """Find a folder by name or create it if it doesn't exist"""
+        """Find a folder by name or create it if it doesn't exist.
+        Paginates through ALL items in the parent folder to avoid missing
+        existing subfolders when a folder has more than 100 children."""
         if not self.client: return None
         
         try:
-            # List items in parent to find the folder
-            items = self.client.folders.get_folder_items(parent_id)
-            for item in items.entries:
-                if item.type == "folder" and item.name == folder_name:
-                    print(f"Found existing folder: {folder_name} (ID: {item.id})")
-                    return item
-            
-            # Not found, create it
+            # Paginate through ALL items — Box returns max 100 per page by default
+            offset = 0
+            limit = 100
+            while True:
+                page = self.client.folders.get_folder_items(
+                    parent_id, limit=limit, offset=offset
+                )
+                for item in page.entries:
+                    if item.type == "folder" and item.name == folder_name:
+                        print(f"Found existing folder: {folder_name} (ID: {item.id})")
+                        return item
+                
+                # If this page was not full, we've seen everything
+                if len(page.entries) < limit:
+                    break
+                offset += limit
+
+            # Not found in any page — create it
             new_folder = self.client.folders.create_folder(
                 folder_name,
                 CreateFolderParent(id=parent_id)
