@@ -37,8 +37,28 @@ from google.genai import types
 
 import models
 from services.box_service import box_service
-from services.segregation import _remove_symbols, _check_readability, STOPLIST
+#from routers.segregation.seg_service import _remove_symbols, _check_readability, STOPLIST, check_latest, _sanitize_text,extract_text_aws_textract_tablestruc
+#from services.segregation import _remove_symbols, _check_readability, STOPLIST, check_latest, _sanitize_text,extract_text_aws_textract_tablestruc
 from services.metadata_pydantic_schema_list import *
+
+from dotenv import load_dotenv
+load_dotenv()
+
+Extraction_Pipeline  = os.getenv("Extraction_Pipeline")
+    #"Azure_ocr_rf_model"
+if Extraction_Pipeline =="Azure_ocr_rf_model":
+    #from services import segregation_Azure_ocr_rf_model as seg_service
+    print(Extraction_Pipeline)
+elif Extraction_Pipeline == "ocmp_ocr_rf_model":
+    from services.segregation import _remove_symbols, _check_readability, STOPLIST, check_latest, _sanitize_text
+    print(Extraction_Pipeline)
+elif Extraction_Pipeline =="Azure_ocr_Gemini_model":
+    #from services import segregation_Azure_ocr_Gemini_model as seg_service
+    print(Extraction_Pipeline)
+elif Extraction_Pipeline =="Aws_textract_rf_model":
+    from services.segregation_Aws_textract_rf_model import _remove_symbols, _check_readability, STOPLIST, check_latest, _sanitize_text,extract_text_aws_textract_tablestruc
+
+    print(Extraction_Pipeline)
 
 
 
@@ -93,26 +113,27 @@ def Extract_text_ocmp(pdf_bytes: bytes, filename: str) -> dict:
 
         if not all_text.strip() or len(final_valid) < 3:
             # Try OCR
-            in_path = out_path = None
-            with tempfile.NamedTemporaryFile(suffix="_in.pdf", delete=False) as fin:
-                fin.write(pdf_bytes)
-                in_path = fin.name
-            with tempfile.NamedTemporaryFile(suffix="_out.pdf", delete=False) as fout:
-                out_path = fout.name
+            # in_path = out_path = None
+            # with tempfile.NamedTemporaryFile(suffix="_in.pdf", delete=False) as fin:
+            #     fin.write(pdf_bytes)
+            #     in_path = fin.name
+            # with tempfile.NamedTemporaryFile(suffix="_out.pdf", delete=False) as fout:
+            #     out_path = fout.name
             try:
-                ocrmypdf.ocr(
-                    in_path, out_path,
-                    deskew=True, rotate_pages=True, force_ocr=True,
-                    progress_bar=False,
-                    pages = f"1-{min(num_pages, 50)}",
-                    jobs=1, tesseract_timeout=300
-                )
-                ocr_doc = fitz.open(out_path)
-                ocr_text = ""
-                for i in range(min(num_pages, 50)):
-                    t = ocr_doc[i].get_text("text")
-                    ocr_text += t
-                ocr_doc.close()
+                # ocrmypdf.ocr(
+                #     in_path, out_path,
+                #     deskew=True, rotate_pages=True, force_ocr=True,
+                #     progress_bar=False,
+                #     pages = f"1-{min(num_pages, 50)}",
+                #     jobs=1, tesseract_timeout=300
+                # )
+                # ocr_doc = fitz.open(out_path)
+                # ocr_text = ""
+                # for i in range(min(num_pages, 50)):
+                #     t = ocr_doc[i].get_text("text")
+                #     ocr_text += t
+                # ocr_doc.close()
+                ocr_text, only_1st_page_text = extract_text_aws_textract_tablestruc(pdf_bytes)
 
                 clean = _remove_symbols(ocr_text)
                 readable, score, valid = _check_readability(clean)
@@ -129,13 +150,13 @@ def Extract_text_ocmp(pdf_bytes: bytes, filename: str) -> dict:
             except Exception as e:
                 result["text_extraction_status"] = "OCR error"
                 result["reason"] = str(e)
-            finally:
-                for p in [in_path, out_path]:
-                    if p:
-                        try:
-                            os.remove(p)
-                        except Exception:
-                            pass
+            # finally:
+            #     for p in [in_path, out_path]:
+            #         if p:
+            #             try:
+            #                 os.remove(p)
+            #             except Exception:
+            #                 pass
         else:
             result["raw_text"]     = all_text
             result["cleaned_text"] = clean
@@ -151,6 +172,11 @@ def Extract_text_ocmp(pdf_bytes: bytes, filename: str) -> dict:
         result["text_extraction_status"] = "Error"
         result["reason"] = str(e)
 
+    # Sanitize string fields before returning to prevent DB write failures (NUL characters)
+    result["raw_text"] = _sanitize_text(result["raw_text"])
+    result["cleaned_text"] = _sanitize_text(result["cleaned_text"]) #
+    result["reason"] = _sanitize_text(result["reason"])
+
     return result
 
 
@@ -164,7 +190,7 @@ def _extract_single_file(row_id: int, box_file_id: str, box_file_name: str) -> d
     """
     try:
         pdf_bytes = box_service.client.downloads.download_file(box_file_id).read()
-        result = Extract_text_ocmp(pdf_bytes, box_file_name)
+        result = Extract_text_ocmp(pdf_bytes, box_file_name) #S
         result["row_id"] = row_id
         return result
     except Exception as e:
@@ -429,6 +455,9 @@ def perform_metadata_tagging(engine_id: int, db: Session):
             .all()
         )
 
+        engine = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
+        engine_csn = engine.csn_value or 0
+
         total = len(rows)
         print(f"[MetadataTagging] Engine {engine_id}: {total} rows to tag")
 
@@ -468,6 +497,10 @@ def perform_metadata_tagging(engine_id: int, db: Session):
                         ).first()
                         if row:
                             row.metadata_json = result["metadata_json"]
+                            # Also check for latest
+                            if row.raw_text:
+                                is_latest = check_latest([row.raw_text], engine_csn)
+                                row.latest = is_latest
                             db.commit()
                         if result["error"]:
                             print(f"[MetadataTagging] Row {rid} warn: {result['error']}")
@@ -535,13 +568,21 @@ def process_single_file(result_id: int, db: Session) -> dict:
         schema_cls = Pydantic_Schema_mapping_dict[row.category]
         print(f"[SingleFile] Row {result_id}: tagging with Gemini ({row.category})...")
         tag_result = _tag_single_row(result_id, row.raw_text, schema_cls)
+        
+        # Get engine CSN for latest check
+        engine = db.query(models.Engine).filter(models.Engine.id == row.engine_id).first()
+        engine_csn = engine.csn_value or 0
+
         try:
             row.metadata_json = tag_result["metadata_json"]
+            # Also update latest column
+            if row.raw_text:
+                row.latest = check_latest([row.raw_text], engine_csn)
             db.commit()
-            print(f"[SingleFile] Row {result_id}: tagging done.")
+            print(f"[SingleFile] Row {result_id}: tagging and latest check done.")
         except Exception as e:
             db.rollback()
-            return {"error": f"Metadata tagging failed: {e}", "metadata_json": None}
+            return {"error": f"Metadata tagging/latest check failed: {e}", "metadata_json": None}
 
     # ── Refresh and return ────────────────────────────────────────────────
     db.refresh(row)
@@ -615,12 +656,16 @@ def perform_full_pipeline(engine_id: int, db: Session):
                 _pipeline_status[engine_id]["status"] = "done"
             return
 
-        def _process_row(row_id, box_file_id, box_file_name, category, raw_text):
+        engine = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
+        engine_csn = engine.csn_value or 0
+
+        def _process_row(row_id, box_file_id, box_file_name, category, raw_text, engine_csn):
             res = {
                 "row_id": row_id, "raw_text": raw_text,
                 "text_extraction_status": None, "metadata_json": None,
                 "meta_data_status": "ok", "did_extract": False,
                 "did_tag": False, "is_error": False,
+                "latest": False, "did_latest": False
             }
             # Step 1: extract text if missing
             if not raw_text or raw_text.strip() == "":
@@ -642,6 +687,10 @@ def perform_full_pipeline(engine_id: int, db: Session):
                 schema_cls = Pydantic_Schema_mapping_dict[category]
                 try:
                     tag = _tag_single_row(row_id, res["raw_text"], schema_cls)
+                    # Latest check
+                    res["latest"] = check_latest([res["raw_text"]], engine_csn)
+                    res["did_latest"] = True
+
                     if tag.get("error"):
                         res["meta_data_status"] = f"Gemini error: {tag['error']}"
                         res["is_error"] = True
@@ -667,7 +716,7 @@ def perform_full_pipeline(engine_id: int, db: Session):
 
         with ThreadPoolExecutor(max_workers=META_WORKERS) as executor:
             future_map = {
-                executor.submit(_process_row, rid, bfid, bfname, cat, txt): rid
+                executor.submit(_process_row, rid, bfid, bfname, cat, txt, engine_csn): rid
                 for rid, bfid, bfname, cat, txt in work_items
             }
 
@@ -693,6 +742,8 @@ def perform_full_pipeline(engine_id: int, db: Session):
                                 row.text_extraction_status = res["text_extraction_status"] or ""
                             if res["did_tag"] and res["metadata_json"] is not None:
                                 row.metadata_json = res["metadata_json"]
+                            if res["did_latest"]:
+                                row.latest = res["latest"]
                             row.meta_data_status = res["meta_data_status"]
                             db.commit()
                     except Exception as db_err:

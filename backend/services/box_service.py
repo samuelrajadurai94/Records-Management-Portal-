@@ -483,7 +483,11 @@ class BoxService:
             )
             
             if hasattr(file_info, 'expiring_embed_link') and file_info.expiring_embed_link:
-                return file_info.expiring_embed_link.url
+                url = file_info.expiring_embed_link.url
+                # Append parameters to hide header elements, branding, and annotations 
+                # for the cleanest possible viewing experience.
+                separator = "&" if "?" in url else "?"
+                return f"{url}{separator}showParentPath=false&showItemName=false&show_logo=0&logo=0&no_logo=1&showAnnotations=false"
             
             return None
                 
@@ -511,7 +515,7 @@ class BoxService:
         if not self.client: return None
         
         try:
-        # Step 1: Resolve shared link to get the folder
+            # Step 1: Resolve shared link to get the folder
             boxapi_header = f"shared_link={shared_link_url}"
             shared_folder = self.client.shared_links_folders.find_folder_for_shared_link(
                 boxapi=boxapi_header
@@ -521,23 +525,48 @@ class BoxService:
             # Step 2: Copy to root folder ("GEM REC PORTAL")
             copied_folder = self.client.folders.copy_folder(
                 folder_id=shared_folder.id,
-                parent={"id":"359797132460"}
+                parent={"id": "359797132460"}
             )
-            print(f"copied to box root folder: {copied_folder.id}")
-            #return copied_folder.id
-            time.sleep(900)
-            # Step 3: Move it to your desired subfolder
-
-            moved_folder = self.client.folders.update_folder_by_id(
-                folder_id=copied_folder.id,
-                parent={"id": dest_parent_id}
-            )
-            print(f"Moved to subfolder: {moved_folder.id}")
-            return moved_folder.id  
+            print(f"Copied to box root folder: {copied_folder.id}")
+            
+            # Step 3: Wait and try to move to the desired subfolder
+            print("Initial wait: 10 minutes...")
+            time.sleep(600)
+            
+            try:
+                moved_folder = self.client.folders.update_folder_by_id(
+                    folder_id=copied_folder.id,
+                    parent={"id": dest_parent_id}
+                )
+                print(f"Moved to subfolder successfully: {moved_folder.id}")
+                return moved_folder.id
+            except Exception as e1:
+                print(f"First move attempt failed: {e1}. Retrying in 15 minutes...")
+                time.sleep(900)
+                try:
+                    moved_folder = self.client.folders.update_folder_by_id(
+                        folder_id=copied_folder.id,
+                        parent={"id": dest_parent_id}
+                    )
+                    print(f"Moved to subfolder successfully on second attempt: {moved_folder.id}")
+                    return moved_folder.id
+                except Exception as e2:
+                    print(f"Second move attempt failed: {e2}. Final retry in 30 minutes...")
+                    time.sleep(1800)
+                    try:
+                        moved_folder = self.client.folders.update_folder_by_id(
+                            folder_id=copied_folder.id,
+                            parent={"id": dest_parent_id}
+                        )
+                        print(f"Moved to subfolder successfully on third attempt: {moved_folder.id}")
+                        return moved_folder.id
+                    except Exception as e3:
+                        print(f"Third move attempt failed: {e3}. Giving up.")
+                        raise Exception("This folder cant be processed. Failed to move after multiple retries.")
 
         except Exception as e:
             print(f"Error importing from shared link: {e}")
-            return None
+            raise e
 
   
 

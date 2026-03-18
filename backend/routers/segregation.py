@@ -10,7 +10,7 @@ from collections import defaultdict
 
 import database, models, dependencies
 
-from services import segregation as seg_service 
+#from services import segregation as seg_service 
 
 import os 
 from dotenv import load_dotenv
@@ -26,6 +26,9 @@ elif Extraction_Pipeline == "ocmp_ocr_rf_model":
     print(Extraction_Pipeline)
 elif Extraction_Pipeline =="Azure_ocr_Gemini_model":
     from services import segregation_Azure_ocr_Gemini_model as seg_service
+    print(Extraction_Pipeline)
+elif Extraction_Pipeline =="Aws_textract_rf_model":
+    from services import segregation_Aws_textract_rf_model as seg_service
     print(Extraction_Pipeline)
 
 router = APIRouter(

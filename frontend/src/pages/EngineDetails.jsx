@@ -1456,12 +1456,20 @@ export default function EngineDetails() {
                         ><X size={20} /></button>
                     )}
                     {segSelectedFile && segSelectedFile.embed_link ? (
-                        <iframe
-                            src={segSelectedFile.embed_link}
-                            style={{ width: '100%', height: '100%', border: 'none' }}
-                            title={segSelectedFile.box_file_name}
-                            allowFullScreen
-                        />
+                        <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+                            {/* Box Logo Masking Div */}
+                            <div style={{
+                                position: 'absolute', top: 0, left: 0,
+                                width: '120px', height: '48px',
+                                background: 'white', zIndex: 5, pointerEvents: 'none'
+                            }} />
+                            <iframe
+                                src={segSelectedFile.embed_link}
+                                style={{ width: '100%', height: '100%', border: 'none' }}
+                                title={segSelectedFile.box_file_name}
+                                allowFullScreen
+                            />
+                        </div>
                     ) : (
                         <div style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
                             <FileText size={64} style={{ opacity: 0.3, marginBottom: '1rem' }} />
@@ -2256,12 +2264,20 @@ export default function EngineDetails() {
                                 ><X size={20} /></button>
                             )}
                             {selectedFile && selectedFile.embed_link ? (
-                                <iframe
-                                    src={selectedFile.embed_link}
-                                    style={{ width: '100%', height: '100%', border: 'none' }}
-                                    title={selectedFile.file_info?.name || selectedFile.name}
-                                    allowFullScreen
-                                />
+                                <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+                                    {/* Box Logo Masking Div */}
+                                    <div style={{
+                                        position: 'absolute', top: 0, left: 0,
+                                        width: '120px', height: '48px',
+                                        background: 'white', zIndex: 5, pointerEvents: 'none'
+                                    }} />
+                                    <iframe
+                                        src={selectedFile.embed_link}
+                                        style={{ width: '100%', height: '100%', border: 'none' }}
+                                        title={selectedFile.file_info?.name || selectedFile.name}
+                                        allowFullScreen
+                                    />
+                                </div>
                             ) : (
                                 <div style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
                                     <FileText size={64} style={{ opacity: 0.3, marginBottom: '1rem' }} />

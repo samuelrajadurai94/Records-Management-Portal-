@@ -23,3 +23,6 @@ google-genai
 azure-ai-documentintelligence
 python-dotenv
 scikit-learn
+
+pdf2image
+boto3

@@ -29,8 +29,104 @@ from sqlalchemy.orm import Session
 import models
 from services.box_service import box_service
 from dotenv import load_dotenv
-
 load_dotenv()
+
+import boto3
+import io
+import os
+from pdf2image import convert_from_bytes
+
+textract_client = boto3.client(
+    "textract",
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.getenv("AWS_REGION"),
+)
+
+def extract_text_aws_textract_tablestruc(pdf_bytes: bytes):
+    images = convert_from_bytes(pdf_bytes,first_page=1, last_page=50)
+     
+
+    final_output = []
+
+    for page_no, image in enumerate(images, start=1):
+        img_bytes = io.BytesIO()
+        image.save(img_bytes, format="PNG")
+        img_bytes = img_bytes.getvalue()
+
+        response = textract_client.analyze_document(
+            Document={"Bytes": img_bytes},
+            FeatureTypes=["TABLES"]
+        )
+
+        blocks = response.get("Blocks", [])
+        block_map = {b["Id"]: b for b in blocks}
+
+        page_text = []
+        page_tables = []
+
+        # ✅ 1. Extract plain text
+        for b in blocks:
+            if b["BlockType"] == "LINE":
+                page_text.append(b["Text"])
+
+        # ✅ 2. Extract tables
+        for block in blocks:
+            if block["BlockType"] == "TABLE":
+                table = {}
+
+                for rel in block.get("Relationships", []):
+                    if rel["Type"] == "CHILD":
+                        for cell_id in rel["Ids"]:
+                            cell = block_map[cell_id]
+
+                            if cell["BlockType"] == "CELL":
+                                row = cell["RowIndex"]
+                                col = cell["ColumnIndex"]
+
+                                text = ""
+                                for rel2 in cell.get("Relationships", []):
+                                    if rel2["Type"] == "CHILD":
+                                        for word_id in rel2["Ids"]:
+                                            word = block_map[word_id]
+                                            if word["BlockType"] == "WORD":
+                                                text += word["Text"] + " "
+
+                                table.setdefault(row, {})[col] = text.strip()
+
+                # ✅ Convert table → formatted string
+                formatted_rows = []
+                max_cols = max(len(r) for r in table.values())
+
+                for r in sorted(table.keys()):
+                    row_data = table[r]
+                    row_text = " | ".join(
+                        row_data.get(c, "") for c in range(1, max_cols + 1)
+                    )
+                    formatted_rows.append(row_text)
+
+                # Optional: add separator line after header
+                if formatted_rows:
+                    separator = " | ".join(["---"] * max_cols)
+                    formatted_rows.insert(1, separator)
+
+                table_string = "\n".join(formatted_rows)
+                page_tables.append(table_string)
+
+        # ✅ 3. Combine page output
+        page_output = []
+        page_output.append(f"--- Page {page_no} ---")
+
+        if page_text:
+            page_output.append("\n".join(page_text))
+
+        if page_tables:
+            page_output.append("\n[Tables]\n")
+            page_output.append("\n\n".join(page_tables))
+
+        final_output.append("\n".join(page_output))
+
+    return "\n\n".join(final_output).strip(),final_output[0]
 
 # ─────────────────────────────────────────────────────────────
 # CONFIG & RESOURCES
@@ -311,27 +407,8 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
         final_valid = [w for w in valid if w.lower() not in STOPLIST]
 
         if not all_text.strip() or len(final_valid) < 3:
-            # Try OCR
-            with tempfile.NamedTemporaryFile(suffix="_in.pdf",  delete=False) as fin:
-                fin.write(pdf_bytes)
-                in_path = fin.name
-            with tempfile.NamedTemporaryFile(suffix="_out.pdf", delete=False) as fout:
-                out_path = fout.name
             try:
-                ocrmypdf.ocr(
-                    in_path, out_path,
-                    deskew=True, rotate_pages=True, force_ocr=True,
-                    progress_bar=False, pages="1-5",
-                    jobs=1, tesseract_timeout=300
-                )
-                ocr_doc = fitz.open(out_path)
-                ocr_page_texts = []
-                ocr_text = ""
-                for i in range(min(len(ocr_doc), 5)):
-                    t = ocr_doc[i].get_text("text")
-                    ocr_page_texts.append(t)
-                    ocr_text += t
-                ocr_doc.close()
+                ocr_text, only_1st_page_text = extract_text_aws_textract_tablestruc(pdf_bytes)
 
                 clean = _remove_symbols(ocr_text)
                 readable, score, valid = _check_readability(clean)
@@ -343,7 +420,7 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
                     result["status"] = "OCR readable"
                     result["reason"] = f"OCR ratio: {score:.2f}"
                     if num_pages < 3:
-                        label = _label_from_keyword_csv(ocr_page_texts[0])
+                        label = _label_from_keyword_csv(only_1st_page_text)
                         if label is not None:
                             result["prediction"] = label
                             result["method"]     = "Direct Keyword"
@@ -360,12 +437,7 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
             except Exception as e:
                 result["status"] = "OCR error"
                 result["reason"] = str(e)
-            finally:
-                for p in [in_path, out_path]:
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
+            
         else:
             result["raw_text"]     = all_text
             result["cleaned_text"] = clean

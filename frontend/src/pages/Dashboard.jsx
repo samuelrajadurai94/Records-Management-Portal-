@@ -100,69 +100,86 @@ export default function Dashboard() {
 
                 const { engine_id, folder_mapping } = initRes.data;
 
-                // 3. Sequential Upload — one file at a time, fully awaited
+                // 3. Concurrent Upload — 2 files in parallel at a time
                 setUploadStage('Uploading files to Box...');
                 const filesArray = Array.from(selectedFiles);
                 let completed = 0;
                 let errors = [];
 
-                for (const file of filesArray) {
-                    try {
-                        const relPath = file.webkitRelativePath || file.name;
-                        const parts = relPath.split('/');
-                        let semanticPath = "RAW FOLDER";
-                        // parts[0] = root folder name on disk (stripped)
-                        // parts[last] = file name
-                        // Everything in between = subfolder path
-                        if (parts.length > 2) {
-                            semanticPath = parts.slice(1, -1).join('/');
-                        }
+                // Helper: upload ONE file with retries
+                const uploadOneFile = async (file) => {
+                    const relPath = file.webkitRelativePath || file.name;
+                    const parts = relPath.split('/');
+                    let semanticPath = "RAW FOLDER";
+                    if (parts.length > 2) {
+                        semanticPath = parts.slice(1, -1).join('/');
+                    }
 
-                        const targetFolderId = folder_mapping[semanticPath] || folder_mapping["RAW FOLDER"];
+                    const targetFolderId = folder_mapping[semanticPath] || folder_mapping["RAW FOLDER"];
+                    if (!targetFolderId) {
+                        throw new Error(`Could not resolve Box folder ID for path: ${semanticPath}`);
+                    }
 
-                        if (!targetFolderId) {
-                            throw new Error(`Could not resolve Box folder ID for path: ${semanticPath}`);
-                        }
+                    const fd = new FormData();
+                    fd.append('box_folder_id', targetFolderId);
+                    fd.append('file', file);
 
-                        const fd = new FormData();
-                        fd.append('box_folder_id', targetFolderId);
-                        fd.append('file', file);
-
-                        let retries = 3;
-                        let success = false;
-                        let lastErr = null;
-
-                        while (retries > 0 && !success) {
-                            try {
-                                await api.post(`/engines/${engine_id}/upload-single-file`, fd, {
-                                    timeout: 1800000, // 30 min timeout for large files via Box chunked upload
-                                });
-                                success = true;
-                            } catch (e) {
-                                lastErr = e;
-                                retries--;
-                                if (retries > 0) {
-                                    // Exponential backoff: 3s → 6s → 12s
-                                    const waitMs = (4 - retries) * 3000;
-                                    console.warn(`Retrying ${file.name} in ${waitMs / 1000}s... (${retries} left)`);
-                                    await new Promise(r => setTimeout(r, waitMs));
-                                }
+                    let retries = 3;
+                    let lastErr = null;
+                    while (retries > 0) {
+                        try {
+                            await api.post(`/engines/${engine_id}/upload-single-file`, fd, {
+                                timeout: 1800000,
+                            });
+                            return; // success
+                        } catch (e) {
+                            lastErr = e;
+                            retries--;
+                            if (retries > 0) {
+                                // Exponential backoff: 3s → 6s → 12s
+                                const waitMs = (4 - retries) * 3000;
+                                console.warn(`Retrying ${file.name} in ${waitMs / 1000}s… (${retries} left)`);
+                                await new Promise(r => setTimeout(r, waitMs));
                             }
                         }
-
-                        if (!success) {
-                            throw lastErr || new Error("Upload failed after 3 attempts");
-                        }
-
-                        completed++;
-                        setUploadFilesCompleted(completed);
-                        setUploadProgress(5 + Math.floor((completed / filesArray.length) * 95));
-
-                    } catch (err) {
-                        errors.push(`${file.name}: ${err.message}`);
-                        setUploadErrors([...errors]);
-                        console.error(`Error uploading ${file.name}:`, err);
                     }
+                    throw lastErr || new Error('Upload failed after 3 attempts');
+                };
+
+                // Concurrency pool — at most 2 uploads in-flight at once
+                const CONCURRENCY = 3;
+                const queue = [...filesArray];
+                const inFlight = new Set();
+
+                const runNext = async () => {
+                    if (queue.length === 0) return;
+                    const file = queue.shift();
+                    const task = uploadOneFile(file)
+                        .then(() => {
+                            completed++;
+                            setUploadFilesCompleted(completed);
+                            setUploadProgress(5 + Math.floor((completed / filesArray.length) * 95));
+                        })
+                        .catch((err) => {
+                            errors.push(`${file.name}: ${err.message}`);
+                            setUploadErrors(prev => [...prev, `${file.name}: ${err.message}`]);
+                            console.error(`Error uploading ${file.name}:`, err);
+                        })
+                        .finally(() => {
+                            inFlight.delete(task);
+                            runNext(); // start next file when a slot frees up
+                        });
+                    inFlight.add(task);
+                };
+
+                // Seed the pool with initial concurrent uploads
+                for (let i = 0; i < Math.min(CONCURRENCY, filesArray.length); i++) {
+                    runNext();
+                }
+
+                // Wait until every in-flight upload has resolved
+                while (inFlight.size > 0 || queue.length > 0) {
+                    await new Promise(r => setTimeout(r, 200));
                 }
 
 
@@ -414,9 +431,11 @@ export default function Dashboard() {
                                     {uploadStage || `Uploading Engine: ${uploadedEngineSerial}`}
                                 </h3>
                                 <p style={{ margin: 0, opacity: 0.9, fontSize: '0.9rem' }}>
-                                    {uploadFilesTotal > 0
-                                        ? `${uploadFilesCompleted} / ${uploadFilesTotal} files uploaded`
-                                        : 'Preparing upload...'}
+                                    {uploadMethod === 'box'
+                                        ? 'Waiting for Box to process import...'
+                                        : (uploadFilesTotal > 0
+                                            ? `${uploadFilesCompleted} / ${uploadFilesTotal} files uploaded`
+                                            : 'Preparing upload...')}
                                 </p>
                             </div>
                             <span style={{ fontSize: '1.1rem', fontWeight: 700 }}>{uploadProgress}%</span>
@@ -472,8 +491,8 @@ export default function Dashboard() {
                             <div>
                                 <h3 style={{ margin: 0, marginBottom: '0.25rem' }}>
                                     {uploadSummary.errors.length === 0
-                                        ? 'Upload Complete!'
-                                        : 'Upload Finished with Skipped Files'}
+                                        ? (uploadMethod === 'box' ? 'Uploaded Successful!' : 'Upload Complete!')
+                                        : (uploadMethod === 'box' ? 'Import Failed' : 'Upload Finished with Skipped Files')}
                                 </h3>
                                 <p style={{ margin: 0, fontSize: '1rem' }}>
                                     <strong>{uploadSummary.succeeded}</strong> of <strong>{uploadSummary.total}</strong> files
@@ -489,7 +508,9 @@ export default function Dashboard() {
                                 padding: '0.75rem', maxHeight: '180px', overflowY: 'auto'
                             }}>
                                 <p style={{ margin: '0 0 0.5rem', fontWeight: 600, fontSize: '0.9rem' }}>
-                                    {uploadSummary.errors.length} file{uploadSummary.errors.length > 1 ? 's' : ''} skipped:
+                                    {uploadMethod === 'box'
+                                        ? 'Error processing link:'
+                                        : `${uploadSummary.errors.length} file${uploadSummary.errors.length > 1 ? 's' : ''} skipped:`}
                                 </p>
                                 {uploadSummary.errors.map((e, i) => (
                                     <p key={i} style={{ margin: '3px 0', fontSize: '0.78rem', wordBreak: 'break-all' }}>
