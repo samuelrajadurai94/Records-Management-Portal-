@@ -38,6 +38,65 @@ function getCategoryIcon(cat) {
     return CATEGORY_ICONS[cat] || '📁';
 }
 
+// ─── SEARCH BAR COMPONENT (Isolated for performance) ─────────────────────────
+const SegSearchBar = ({ initialQuery, onSearch, onClear }) => {
+    const [val, setVal] = useState(initialQuery || '');
+
+    useEffect(() => {
+        setVal(initialQuery);
+    }, [initialQuery]);
+
+    const handleSearch = () => {
+        if (!val.trim()) {
+            onClear();
+        } else {
+            onSearch(val);
+        }
+    };
+
+    return (
+        <div style={{ marginBottom: '8px', position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+            <input
+                type="text"
+                placeholder="Search: logbook, 88902, 12/06/22..."
+                value={val}
+                onChange={e => {
+                    setVal(e.target.value);
+                    if (!e.target.value.trim()) onClear();
+                }}
+                onKeyDown={e => {
+                    if (e.key === 'Enter') handleSearch();
+                }}
+                style={{
+                    flex: 1, padding: '8px 56px 8px 12px',
+                    borderRadius: '8px', border: '1px solid #c5d8f0',
+                    fontSize: '0.78rem', background: 'white', outline: 'none',
+                    boxSizing: 'border-box'
+                }}
+            />
+            {val && (
+                <button
+                    onClick={() => { setVal(''); onClear(); }}
+                    style={{
+                        position: 'absolute', right: '34px', top: '50%',
+                        transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer',
+                        color: '#888', padding: '2px', display: 'flex'
+                    }}
+                ><X size={14} /></button>
+            )}
+            <button
+                onClick={handleSearch}
+                style={{
+                    position: 'absolute', right: '8px', top: '50%',
+                    transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer',
+                    color: val.trim() ? 'var(--primary)' : '#aaa', padding: '2px', display: 'flex',
+                    borderLeft: '1px solid #e0e0e0', paddingLeft: '6px'
+                }}
+            ><Search size={15} strokeWidth={2.5} /></button>
+        </div>
+    );
+};
+
 // ─── LLP STATUS COMPONENT ──────────────────────────────────────────────────
 const THRUST_RATINGS = ["7B20", "7B22", "7B24", "7B26", "7B27", "7B20E", "7B22E", "7B24E", "7B26E", "7B27E"];
 
@@ -757,6 +816,13 @@ export default function EngineDetails() {
     const [segSelectedFile, setSegSelectedFile] = useState(null);
     const [segPollInterval, setSegPollInterval] = useState(null);
 
+    // Search state
+    const [segSearchQuery, setSegSearchQuery] = useState('');
+    const [segSearchResults, setSegSearchResults] = useState([]);
+    const [segSearching, setSegSearching] = useState(false);
+    const [segSearchMode, setSegSearchMode] = useState(false);
+    const segSearchTimerRef = React.useRef(null);
+
     // Metadata Extraction state
     const [fileStats, setFileStats] = useState(null);
 
@@ -1293,133 +1359,250 @@ export default function EngineDetails() {
                 <div style={{
                     width: `${sidebarWidth}px`, background: '#E3F2FD',
                     borderRight: '1px solid #e0e0e0', overflowY: 'auto',
-                    padding: '0.75rem 0.5rem', position: 'relative'
+                    padding: '0.75rem 0.5rem', position: 'relative',
+                    display: 'flex', flexDirection: 'column'
                 }}>
-                    {/* Summary bar */}
-                    <div style={{
-                        background: 'white', borderRadius: '8px',
-                        padding: '8px 10px', marginBottom: '10px',
-                        fontSize: '0.72rem', color: '#555',
-                        display: 'flex', flexWrap: 'wrap', gap: '6px'
-                    }}>
-                        <span>📂 <b>{summary.total_files}</b> files</span>
-                        <span>📄 <b>{summary.pdf_files}</b> PDFs</span>
-                        <span>🖼 <b>{summary.media_files}</b> media</span>
-                        <span>📎 <b>{summary.other_files}</b> other</span>
-                        <span>🗂 <b>{summary.categories_found}</b> categories</span>
-                    </div>
+                    {/* ── Search Bar ── */}
+                    <SegSearchBar
+                        initialQuery={segSearchQuery}
+                        onSearch={async (query) => {
+                            setSegSearchQuery(query);
+                            setSegSearching(true);
+                            setSegSearchMode(true);
+                            try {
+                                const res = await api.get(`/segregation/search/${id}`, { params: { q: query } });
+                                setSegSearchResults(res.data);
+                            } catch (err) {
+                                console.error('Search error:', err);
+                                setSegSearchResults([]);
+                            } finally {
+                                setSegSearching(false);
+                            }
+                        }}
+                        onClear={() => {
+                            setSegSearchQuery('');
+                            setSegSearchMode(false);
+                            setSegSearchResults([]);
+                        }}
+                    />
 
-                    {Object.entries(segregated).map(([category, files]) => {
-                        const isOpen = !!expandedCategories[category];
-
-                        // Separate files: tree-methods vs flat-methods (exclude latest — shown in ⭐ Latest folder only)
-                        const treeFiles = files.filter(f => TREE_METHODS.has(f.method) && !f.latest);
-                        const flatFiles = files.filter(f => !TREE_METHODS.has(f.method) && !f.latest);
-                        const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles) : null;
-
-                        return (
-                            <div key={category}>
-                                {/* Category folder row */}
-                                <div
-                                    onClick={() => setExpandedCategories(prev => ({
-                                        ...prev, [category]: !prev[category]
-                                    }))}
-                                    style={{
-                                        display: 'flex', alignItems: 'center',
-                                        padding: '8px 10px', cursor: 'pointer',
-                                        background: 'transparent', color: 'var(--primary)',
-                                        borderRadius: '6px', marginBottom: '2px',
-                                        fontWeight: 600, fontSize: '0.85rem',
-                                        transition: 'background 0.2s',
-                                    }}
-                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'white'; }}
-                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                >
-                                    <span style={{ marginRight: '4px', display: 'flex', alignItems: 'center' }}>
-                                        {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                                    </span>
-                                    {isOpen
-                                        ? <FolderOpen size={15} style={{ marginRight: '6px', color: '#f59e0b' }} />
-                                        : <Folder size={15} style={{ marginRight: '6px', color: '#f59e0b' }} />}
-                                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                        {getCategoryIcon(category)} {category}
-                                    </span>
-                                    <span style={{
-                                        background: '#dbeafe', color: '#1d4ed8',
-                                        borderRadius: '10px', padding: '1px 7px',
-                                        fontSize: '0.7rem', fontWeight: 700, marginLeft: '4px'
-                                    }}>{files.length}</span>
+                    {/* ── Search Results ── */}
+                    {segSearchMode ? (
+                        <div style={{ flex: 1, overflowY: 'auto' }}>
+                            {segSearching && (
+                                <div style={{ textAlign: 'center', padding: '1.5rem', color: '#666', fontSize: '0.8rem' }}>
+                                    <Loader size={18} className="spinner" style={{ marginBottom: '6px' }} />
+                                    <div>Searching...</div>
                                 </div>
-
-                                {/* Expanded content */}
-                                {isOpen && (() => {
-                                    const latestFiles = files.filter(f => f.latest);
-                                    const latestKey = `_latest_${category}`;
-                                    const isLatestOpen = !!expandedCategories[latestKey];
-                                    return (
-                                        <>
-                                            {/* ⭐ Latest folder — shown only if any latest files exist */}
-                                            {latestFiles.length > 0 && (
-                                                <div>
-                                                    <div
-                                                        onClick={() => setExpandedCategories(prev => ({
-                                                            ...prev, [latestKey]: !prev[latestKey]
-                                                        }))}
-                                                        style={{
-                                                            display: 'flex', alignItems: 'center',
-                                                            padding: '6px 8px', paddingLeft: '28px',
-                                                            cursor: 'pointer', background: 'transparent',
-                                                            color: '#2e7d32', borderRadius: '5px',
-                                                            marginBottom: '1px', fontWeight: 600,
-                                                            fontSize: '0.8rem', transition: 'background 0.15s',
-                                                        }}
-                                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(232,245,233,0.7)'; }}
-                                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                                    >
-                                                        <span style={{ marginRight: '4px', display: 'flex', alignItems: 'center' }}>
-                                                            {isLatestOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                                                        </span>
-                                                        {isLatestOpen
-                                                            ? <FolderOpen size={14} style={{ marginRight: '6px', color: '#2e7d32' }} />
-                                                            : <Folder size={14} style={{ marginRight: '6px', color: '#2e7d32' }} />}
-                                                        <span style={{ flex: 1 }}>⭐ Latest</span>
-                                                        <span style={{
-                                                            background: '#e8f5e9', color: '#2e7d32',
-                                                            borderRadius: '10px', padding: '0px 6px',
-                                                            fontSize: '0.65rem', fontWeight: 700, marginLeft: '4px'
-                                                        }}>{latestFiles.length}</span>
-                                                    </div>
-                                                    {isLatestOpen && latestFiles.map(file => (
-                                                        <SegFlatFileItem key={`latest_${file.box_file_id}`} file={file} />
-                                                    ))}
+                            )}
+                            {!segSearching && segSearchResults.length === 0 && (
+                                <div style={{ textAlign: 'center', padding: '1.5rem', color: '#888', fontSize: '0.8rem' }}>
+                                    <div style={{ fontSize: '2rem', marginBottom: '6px' }}>🔍</div>
+                                    No matching documents found.
+                                </div>
+                            )}
+                            {!segSearching && segSearchResults.length > 0 && (
+                                <>
+                                    <div style={{ fontSize: '0.7rem', color: '#555', padding: '4px 6px 8px', fontWeight: 600 }}>
+                                        {segSearchResults.length} result{segSearchResults.length !== 1 ? 's' : ''} found
+                                    </div>
+                                    {segSearchResults.map(file => {
+                                        const isSelected = segSelectedFile?.box_file_id === file.box_file_id;
+                                        const mStyle = METHOD_COLORS[file.method] || METHOD_COLORS['Unclassified'];
+                                        return (
+                                            <div
+                                                key={file.id}
+                                                onClick={() => handleSegFileClick(file)}
+                                                style={{
+                                                    background: isSelected ? 'var(--primary)' : 'white',
+                                                    color: isSelected ? 'white' : 'inherit',
+                                                    borderRadius: '8px', padding: '8px 10px',
+                                                    marginBottom: '6px', cursor: 'pointer',
+                                                    border: '1px solid #ddeeff',
+                                                    boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                                                    transition: 'background 0.15s'
+                                                }}
+                                                onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = '#e8f4ff'; }}
+                                                onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'white'; }}
+                                            >
+                                                {/* Score badge + filename */}
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                                                    <span style={{
+                                                        background: isSelected ? 'rgba(255,255,255,0.25)' : '#023e8a',
+                                                        color: 'white', borderRadius: '10px',
+                                                        padding: '1px 7px', fontSize: '0.62rem', fontWeight: 700,
+                                                        flexShrink: 0
+                                                    }}>Score: {file.score}</span>
+                                                    <FileText size={11} style={{ flexShrink: 0, opacity: 0.7 }} />
+                                                    <span style={{
+                                                        fontSize: '0.77rem', fontWeight: 600,
+                                                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1
+                                                    }} title={file.box_file_name}>{file.box_file_name}</span>
                                                 </div>
-                                            )}
-                                            {/* Tree-rendered files (Folder Match / Manual / Extension / Unclassified) */}
-                                            {folderTree && (
+                                                {/* Category badge + method */}
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', paddingLeft: '24px' }}>
+                                                    <span style={{
+                                                        fontSize: '0.62rem', padding: '1px 6px', borderRadius: '8px',
+                                                        background: isSelected ? 'rgba(255,255,255,0.2)' : '#e3f2fd',
+                                                        color: isSelected ? 'white' : '#0d47a1', fontWeight: 600
+                                                    }}>{getCategoryIcon(file.category)} {file.category}</span>
+                                                    <span style={{
+                                                        fontSize: '0.6rem', padding: '1px 5px', borderRadius: '8px',
+                                                        background: isSelected ? 'rgba(255,255,255,0.15)' : mStyle.bg,
+                                                        color: isSelected ? 'white' : mStyle.color, fontWeight: 600
+                                                    }}>{file.method}</span>
+                                                </div>
+                                                {/* Match reasons */}
+                                                <div style={{ paddingLeft: '24px', marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
+                                                    {(file.match_reasons || []).slice(0, 4).map((r, i) => (
+                                                        <span key={i} style={{
+                                                            fontSize: '0.58rem', padding: '1px 5px', borderRadius: '6px',
+                                                            background: isSelected ? 'rgba(255,255,255,0.15)' : '#fff3cd',
+                                                            color: isSelected ? 'white' : '#856404',
+                                                            border: isSelected ? 'none' : '1px solid #ffc10733'
+                                                        }}>✓ {r}</span>
+                                                    ))}
+                                                    {(file.match_reasons || []).length > 4 && (
+                                                        <span style={{ fontSize: '0.58rem', color: isSelected ? 'rgba(255,255,255,0.7)' : '#888' }}>
+                                                            +{file.match_reasons.length - 4} more
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </>
+                            )}
+                        </div>
+                    ) : (
+                        <div style={{ flex: 1, overflowY: 'auto' }}>
+                            {/* Summary bar */}
+                            <div style={{
+                                background: 'white', borderRadius: '8px',
+                                padding: '8px 10px', marginBottom: '10px',
+                                fontSize: '0.72rem', color: '#555',
+                                display: 'flex', flexWrap: 'wrap', gap: '6px'
+                            }}>
+                                <span>📂 <b>{summary.total_files}</b> files</span>
+                                <span>📄 <b>{summary.pdf_files}</b> PDFs</span>
+                                <span>🖼 <b>{summary.media_files}</b> media</span>
+                                <span>📎 <b>{summary.other_files}</b> other</span>
+                                <span>🗂 <b>{summary.categories_found}</b> categories</span>
+                            </div>
+
+                            {Object.entries(segregated).map(([category, files]) => {
+                                const isOpen = !!expandedCategories[category];
+
+                                // Separate files: tree-methods vs flat-methods (exclude latest — shown in ⭐ Latest folder only)
+                                const treeFiles = files.filter(f => TREE_METHODS.has(f.method) && !f.latest);
+                                const flatFiles = files.filter(f => !TREE_METHODS.has(f.method) && !f.latest);
+                                const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles) : null;
+
+                                return (
+                                    <div key={category}>
+                                        {/* Category folder row */}
+                                        <div
+                                            onClick={() => setExpandedCategories(prev => ({
+                                                ...prev, [category]: !prev[category]
+                                            }))}
+                                            style={{
+                                                display: 'flex', alignItems: 'center',
+                                                padding: '8px 10px', cursor: 'pointer',
+                                                background: 'transparent', color: 'var(--primary)',
+                                                borderRadius: '6px', marginBottom: '2px',
+                                                fontWeight: 600, fontSize: '0.85rem',
+                                                transition: 'background 0.2s',
+                                            }}
+                                            onMouseEnter={(e) => { e.currentTarget.style.background = 'white'; }}
+                                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                        >
+                                            <span style={{ marginRight: '4px', display: 'flex', alignItems: 'center' }}>
+                                                {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                                            </span>
+                                            {isOpen
+                                                ? <FolderOpen size={15} style={{ marginRight: '6px', color: '#f59e0b' }} />
+                                                : <Folder size={15} style={{ marginRight: '6px', color: '#f59e0b' }} />}
+                                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {getCategoryIcon(category)} {category}
+                                            </span>
+                                            <span style={{
+                                                background: '#dbeafe', color: '#1d4ed8',
+                                                borderRadius: '10px', padding: '1px 7px',
+                                                fontSize: '0.7rem', fontWeight: 700, marginLeft: '4px'
+                                            }}>{files.length}</span>
+                                        </div>
+
+                                        {/* Expanded content */}
+                                        {isOpen && (() => {
+                                            const latestFiles = files.filter(f => f.latest);
+                                            const latestKey = `_latest_${category}`;
+                                            const isLatestOpen = !!expandedCategories[latestKey];
+                                            return (
                                                 <>
-                                                    {/* Files at root level (no folder path) */}
-                                                    {folderTree.files.map(file => (
+                                                    {/* ⭐ Latest folder — shown only if any latest files exist */}
+                                                    {latestFiles.length > 0 && (
+                                                        <div>
+                                                            <div
+                                                                onClick={() => setExpandedCategories(prev => ({
+                                                                    ...prev, [latestKey]: !prev[latestKey]
+                                                                }))}
+                                                                style={{
+                                                                    display: 'flex', alignItems: 'center',
+                                                                    padding: '6px 8px', paddingLeft: '28px',
+                                                                    cursor: 'pointer', background: 'transparent',
+                                                                    color: '#2e7d32', borderRadius: '5px',
+                                                                    marginBottom: '1px', fontWeight: 600,
+                                                                    fontSize: '0.8rem', transition: 'background 0.15s',
+                                                                }}
+                                                                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(232,245,233,0.7)'; }}
+                                                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                                            >
+                                                                <span style={{ marginRight: '4px', display: 'flex', alignItems: 'center' }}>
+                                                                    {isLatestOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                                                </span>
+                                                                {isLatestOpen
+                                                                    ? <FolderOpen size={14} style={{ marginRight: '6px', color: '#2e7d32' }} />
+                                                                    : <Folder size={14} style={{ marginRight: '6px', color: '#2e7d32' }} />}
+                                                                <span style={{ flex: 1 }}>⭐ Latest</span>
+                                                                <span style={{
+                                                                    background: '#e8f5e9', color: '#2e7d32',
+                                                                    borderRadius: '10px', padding: '0px 6px',
+                                                                    fontSize: '0.65rem', fontWeight: 700, marginLeft: '4px'
+                                                                }}>{latestFiles.length}</span>
+                                                            </div>
+                                                            {isLatestOpen && latestFiles.map(file => (
+                                                                <SegFlatFileItem key={`latest_${file.box_file_id}`} file={file} />
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    {/* Tree-rendered files (Folder Match / Manual / Extension / Unclassified) */}
+                                                    {folderTree && (
+                                                        <>
+                                                            {/* Files at root level (no folder path) */}
+                                                            {folderTree.files.map(file => (
+                                                                <SegFlatFileItem key={file.box_file_id} file={file} />
+                                                            ))}
+                                                            {/* Nested folder nodes */}
+                                                            {Object.values(folderTree.children)
+                                                                .sort((a, b) => a.name.localeCompare(b.name))
+                                                                .map(child => (
+                                                                    <SegFolderNode key={child.name} node={child} level={1} pathKey={category} />
+                                                                ))
+                                                            }
+                                                        </>
+                                                    )}
+                                                    {/* Flat-rendered files (Direct Keyword / AI MODEL) */}
+                                                    {flatFiles.map(file => (
                                                         <SegFlatFileItem key={file.box_file_id} file={file} />
                                                     ))}
-                                                    {/* Nested folder nodes */}
-                                                    {Object.values(folderTree.children)
-                                                        .sort((a, b) => a.name.localeCompare(b.name))
-                                                        .map(child => (
-                                                            <SegFolderNode key={child.name} node={child} level={1} pathKey={category} />
-                                                        ))
-                                                    }
                                                 </>
-                                            )}
-                                            {/* Flat-rendered files (Direct Keyword / AI MODEL) */}
-                                            {flatFiles.map(file => (
-                                                <SegFlatFileItem key={file.box_file_id} file={file} />
-                                            ))}
-                                        </>
-                                    );
-                                })()}
-                            </div>
-                        );
-                    })}
+                                            );
+                                        })()}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
 
                     {/* Resize handle */}
                     <div
