@@ -10,7 +10,6 @@ backend/Inference_Gemini_Fold_seg.ipynb
 backend/google_drive_link.ipynb
 backend/google_drive_api.json
 
-
 # Node
 node_modules/
 dist/
