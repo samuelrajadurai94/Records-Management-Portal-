@@ -4,13 +4,14 @@ __pycache__/
 *$py.class
 gemrec_env/
 .env
+backend/Gemrec_test1.ipynb
+folder segregation app/
+backend/Inference_Gemini_Fold_seg.ipynb
+backend/google_drive_link.ipynb
+backend/google_drive_api.json
+
 
 # Node
 node_modules/
 dist/
 .DS_Store
-backend/Gemrec_test1.ipynb
-folder segregation app/
-backend/Inference_Gemini_Fold_seg.ipynb
-backend/google_drive_api.json
-backend/google_drive_link.ipynb
