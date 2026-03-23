@@ -380,3 +380,174 @@ def search_segregated_files(
     # Sort by score descending
     ranked = sorted(scores.values(), key=lambda x: x["score"], reverse=True)
     return ranked
+
+import tempfile
+import shutil
+from fastapi.responses import FileResponse
+from threading import Thread
+
+# Global dict to store download zip tasks
+zip_tasks = {}
+
+def _build_segregation_zip(engine_id: int, category: str = None):
+    # This requires its own db session
+    from database import SessionLocal
+    db = SessionLocal()
+    task_key = f"{engine_id}_{category or 'All'}"
+    
+    try:
+        from services.box_service import box_service
+        
+        # 1. Fetch engine
+        engine = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
+        if not engine:
+            zip_tasks[task_key] = {"status": "error", "progress": 0, "error": "Engine not found"}
+            return
+            
+        query = db.query(models.SegregationResult).filter(models.SegregationResult.engine_id == engine_id)
+        if category:
+            query = query.filter(models.SegregationResult.category == category)
+            
+        rows = query.all()
+        if not rows:
+            zip_tasks[task_key] = {"status": "error", "progress": 0, "error": "No segregated files found"}
+            return
+            
+        temp_dir = tempfile.mkdtemp(prefix=f"zip_{engine_id}_{category or 'All'}_")
+        total = len(rows)
+        
+        TREE_METHODS = {"Folder Match", "Extension", "Unclassified", "Manual"}
+        
+        for i, row in enumerate(rows):
+            # Clean category name
+            safe_category = "".join(c for c in row.category if c not in r'<>:"/\|?*').strip()
+            base_path = os.path.join(temp_dir, safe_category)
+            
+            if row.latest:
+                target_dir = os.path.join(base_path, "⭐ Latest")
+            elif row.method in TREE_METHODS:
+                path_str = row.original_folder_path or ""
+                parts = [p.strip() for p in path_str.split("/") if p.strip()]
+                # UI logic: skip the first segment (root/engine folder)
+                sub_parts = parts[1:] if len(parts) > 0 else []
+                # Clean sub_parts for safe folder names
+                sub_parts = ["".join(c for c in p if c not in r'<>:"/\|?*') for p in sub_parts]
+                
+                target_dir = os.path.join(base_path, *sub_parts) if sub_parts else base_path
+            else:
+                target_dir = base_path
+                
+            os.makedirs(target_dir, exist_ok=True)
+            
+            # Download from Box
+            if row.box_file_id:
+                try:
+                    # New box-sdk-gen syntax for downloading files
+                    file_stream = box_service.client.downloads.download_file(row.box_file_id)
+                    file_content = file_stream.read()
+                    
+                    file_name = row.box_file_name or f"file_{row.box_file_id}.pdf"
+                    file_path = os.path.join(target_dir, file_name)
+                    with open(file_path, "wb") as f:
+                        f.write(file_content)
+                except Exception as e:
+                    print(f"Failed to download {row.box_file_name} for zip: {e}")
+                    
+            zip_tasks[task_key]["progress"] = int(((i + 1) / total) * 90)  # 0-90% for downloading
+            
+        # Create Zip
+        zip_tasks[task_key]["progress"] = 95
+        
+        if category:
+            safe_cat_name = "".join(c for c in category if c not in r'<>:"/\|?*').strip()
+            zip_filename = f"Segregated_Engine_{engine.serial_number}_{safe_cat_name}"
+        else:
+            zip_filename = f"Segregated_Engine_{engine.serial_number}"
+            
+        zip_output_path = os.path.join(tempfile.gettempdir(), zip_filename)
+        
+        # shutil.make_archive adds .zip automatically
+        zip_path = shutil.make_archive(zip_output_path, 'zip', temp_dir)
+        
+        # Cleanup temp dir
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        
+        zip_tasks[task_key] = {
+            "status": "done",
+            "progress": 100,
+            "zip_path": zip_path,
+            "zip_filename": f"{zip_filename}.zip",
+            "error": None
+        }
+        
+    except Exception as e:
+        print(f"Zip builder failed for {task_key}: {e}")
+        zip_tasks[task_key] = {"status": "error", "progress": 0, "error": str(e)}
+    finally:
+        db.close()
+
+@router.post("/start-download-zip/{engine_id}")
+def start_segregation_zip(
+    engine_id: int,
+    category: str = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    engine = db.query(models.Engine).filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id).first()
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+        
+    task_key = f"{engine_id}_{category or 'All'}"
+    if task_key in zip_tasks and zip_tasks[task_key]["status"] == "running":
+        return {"message": "Zipping already in progress"}
+        
+    zip_tasks[task_key] = {"status": "running", "progress": 0, "error": None}
+    
+    thread = Thread(target=_build_segregation_zip, args=(engine_id, category))
+    thread.start()
+    
+    return {"message": "Zip building started"}
+
+@router.get("/download-zip-status/{engine_id}")
+def check_segregation_zip_status(
+    engine_id: int,
+    category: str = None,
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    task_key = f"{engine_id}_{category or 'All'}"
+    if task_key not in zip_tasks:
+        return {"status": "idle", "progress": 0}
+    return zip_tasks[task_key]
+
+@router.get("/download-zip/{engine_id}")
+def download_segregation_zip(
+    engine_id: int,
+    background_tasks: BackgroundTasks,
+    category: str = None,
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    task_key = f"{engine_id}_{category or 'All'}"
+    if task_key not in zip_tasks or zip_tasks[task_key]["status"] != "done":
+        raise HTTPException(status_code=400, detail="Zip file not ready or task failed")
+        
+    task = zip_tasks[task_key]
+    zip_path = task.get("zip_path")
+    
+    if not zip_path or not os.path.exists(zip_path):
+        raise HTTPException(status_code=404, detail="Zip file not found on server")
+        
+    def cleanup():
+        try:
+            os.remove(zip_path)
+            if engine_id in zip_tasks:
+                del zip_tasks[engine_id]
+        except Exception as e:
+            print(f"Failed to cleanup zip {zip_path}: {e}")
+
+    background_tasks.add_task(cleanup)
+    
+    return FileResponse(
+        path=zip_path,
+        filename=task.get("zip_filename", f"Segregated_Folder.zip"),
+        media_type="application/zip",
+    )

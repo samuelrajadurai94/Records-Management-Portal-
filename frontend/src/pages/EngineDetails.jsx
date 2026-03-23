@@ -4,7 +4,7 @@ import api from '../api';
 import {
     FileText, Folder, FolderOpen, ChevronRight, ChevronDown,
     ArrowLeft, Search, SortAsc, CheckSquare, LogOut, Loader, X,
-    Shuffle, CheckCircle, AlertCircle, Info, Clock, Save, Edit3, Eye, ShieldAlert, Settings
+    Shuffle, CheckCircle, AlertCircle, Info, Clock, Save, Edit3, Eye, ShieldAlert, Settings, Download
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -823,6 +823,15 @@ export default function EngineDetails() {
     const [segSearchMode, setSegSearchMode] = useState(false);
     const segSearchTimerRef = React.useRef(null);
 
+    // ZIP Download state
+    const [zipStatus, setZipStatus] = useState('idle'); // idle|running|done|error
+    const [zipProgress, setZipProgress] = useState(0);
+    const [zipPollInterval, setZipPollInterval] = useState(null);
+
+    // Filter-level Zip state
+    const [folderZipStatus, setFolderZipStatus] = useState({}); // { [category]: 'running'|'done'|'idle'|'error' }
+    const [folderZipProgress, setFolderZipProgress] = useState({}); // { [category]: number }
+
     // Metadata Extraction state
     const [fileStats, setFileStats] = useState(null);
 
@@ -950,8 +959,11 @@ export default function EngineDetails() {
 
     // Cleanup polling on unmount
     useEffect(() => {
-        return () => { if (segPollInterval) clearInterval(segPollInterval); };
-    }, [segPollInterval]);
+        return () => {
+            if (segPollInterval) clearInterval(segPollInterval);
+            if (zipPollInterval) clearInterval(zipPollInterval);
+        };
+    }, [segPollInterval, zipPollInterval]);
 
     // ── Segregation trigger ───────────────────────────────────────────────
     const handleRunSegregation = async () => {
@@ -980,6 +992,99 @@ export default function EngineDetails() {
         } catch (err) {
             setSegStatus('error');
             console.error(err);
+        }
+    };
+
+    // ── Download ZIP trigger ──────────────────────────────────────────────
+    const handleDownloadZip = async () => {
+        if (zipStatus === 'running') return;
+        setZipStatus('running');
+        setZipProgress(0);
+        try {
+            await api.post(`/segregation/start-download-zip/${id}`);
+            const interval = setInterval(async () => {
+                try {
+                    const statusRes = await api.get(`/segregation/download-zip-status/${id}`);
+                    const { status, progress } = statusRes.data;
+                    setZipProgress(progress || 0);
+
+                    if (status === 'done') {
+                        clearInterval(interval);
+                        setZipPollInterval(null);
+                        setZipStatus('done');
+
+                        // We fetch as blob using axios client "api" to include interceptor tokens implicitly
+                        const resp = await api.get(`/segregation/download-zip/${id}`, { responseType: 'blob' });
+                        const url = window.URL.createObjectURL(new Blob([resp.data]));
+                        const a = document.createElement('a');
+                        a.style.display = 'none';
+                        a.href = url;
+                        a.download = `Segregated_Engine_${engine?.serial_number || id}.zip`;
+                        document.body.appendChild(a);
+                        a.click();
+                        window.URL.revokeObjectURL(url);
+
+                        // Briefly show 'done' then set back to idle so they can download again later
+                        setTimeout(() => setZipStatus('idle'), 3000);
+
+                    } else if (status === 'error') {
+                        clearInterval(interval);
+                        setZipPollInterval(null);
+                        setZipStatus('error');
+                    }
+                } catch (e) {
+                    console.error("Poll zip err", e);
+                }
+            }, 3000);
+            setZipPollInterval(interval);
+        } catch (err) {
+            setZipStatus('error');
+            console.error("Start zip failed", err);
+        }
+    };
+
+    // ── Download Folder-wise ZIP trigger ──────────────────────────────────
+    const handleDownloadFolderZip = async (category) => {
+        if (folderZipStatus[category] === 'running') return;
+        setFolderZipStatus(prev => ({ ...prev, [category]: 'running' }));
+
+        try {
+            await api.post(`/segregation/start-download-zip/${id}?category=${encodeURIComponent(category)}`);
+            const interval = setInterval(async () => {
+                try {
+                    const statusRes = await api.get(`/segregation/download-zip-status/${id}?category=${encodeURIComponent(category)}`);
+                    const { status, progress } = statusRes.data;
+
+                    setFolderZipProgress(prev => ({ ...prev, [category]: progress || 0 }));
+
+                    if (status === 'done') {
+                        clearInterval(interval);
+                        setFolderZipStatus(prev => ({ ...prev, [category]: 'done' }));
+
+                        const resp = await api.get(`/segregation/download-zip/${id}?category=${encodeURIComponent(category)}`, { responseType: 'blob' });
+                        const url = window.URL.createObjectURL(new Blob([resp.data]));
+                        const a = document.createElement('a');
+                        a.style.display = 'none';
+                        a.href = url;
+                        // Clean category name for file path
+                        const cleanCat = category.replace(/[^a-zA-Z0-9_-]/g, '_');
+                        a.download = `Segregated_Engine_${engine?.serial_number || id}_${cleanCat}.zip`;
+                        document.body.appendChild(a);
+                        a.click();
+                        window.URL.revokeObjectURL(url);
+
+                        setTimeout(() => setFolderZipStatus(prev => ({ ...prev, [category]: 'idle' })), 3000);
+                    } else if (status === 'error') {
+                        clearInterval(interval);
+                        setFolderZipStatus(prev => ({ ...prev, [category]: 'error' }));
+                    }
+                } catch (e) {
+                    console.error("Poll folder zip err", e);
+                }
+            }, 3000);
+        } catch (err) {
+            setFolderZipStatus(prev => ({ ...prev, [category]: 'error' }));
+            console.error("Start folder zip failed", err);
         }
     };
 
@@ -1528,8 +1633,41 @@ export default function EngineDetails() {
                                             <span style={{
                                                 background: '#dbeafe', color: '#1d4ed8',
                                                 borderRadius: '10px', padding: '1px 7px',
-                                                fontSize: '0.7rem', fontWeight: 700, marginLeft: '4px'
+                                                fontSize: '0.7rem', fontWeight: 700, marginLeft: '4px', marginRight: 'auto'
                                             }}>{files.length}</span>
+
+                                            {/* Folder Download Progress */}
+                                            {folderZipStatus[category] === 'running' && (
+                                                <span style={{ fontSize: '0.7rem', color: '#16a34a', fontWeight: 600, marginLeft: '6px' }}>
+                                                    {folderZipProgress[category] || 0}%
+                                                </span>
+                                            )}
+
+                                            {/* Folder Download Button */}
+                                            {segStatus === 'done' && (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleDownloadFolderZip(category);
+                                                    }}
+                                                    disabled={folderZipStatus[category] === 'running'}
+                                                    title={`Download ${category}`}
+                                                    style={{
+                                                        background: 'transparent',
+                                                        border: 'none',
+                                                        color: folderZipStatus[category] === 'running' ? '#94a3b8' : '#16a34a',
+                                                        cursor: folderZipStatus[category] === 'running' ? 'not-allowed' : 'pointer',
+                                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                        padding: '2px', marginLeft: '8px'
+                                                    }}
+                                                >
+                                                    {folderZipStatus[category] === 'running' ? (
+                                                        <Loader size={15} className="spinner" />
+                                                    ) : (
+                                                        <Download size={15} />
+                                                    )}
+                                                </button>
+                                            )}
                                         </div>
 
                                         {/* Expanded content */}
@@ -2531,6 +2669,25 @@ export default function EngineDetails() {
                             {segStatus === 'running' ? <Loader size={13} className="spinner" /> : <Shuffle size={13} />}
                             {segStatus === 'running' ? 'Processing...' : '🔄 Re-run Segregation'}
                         </button>
+
+                        {segStatus === 'done' && (
+                            <button
+                                onClick={handleDownloadZip}
+                                disabled={zipStatus === 'running'}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: '8px',
+                                    padding: '7px 16px', borderRadius: '8px', border: 'none',
+                                    background: zipStatus === 'running' ? '#94a3b8' : '#16a34a',
+                                    color: 'white', fontWeight: 700, fontSize: '0.8rem',
+                                    cursor: zipStatus === 'running' ? 'not-allowed' : 'pointer',
+                                    boxShadow: '0 2px 6px rgba(22,163,74,0.25)',
+                                    marginLeft: 'auto'
+                                }}
+                            >
+                                {zipStatus === 'running' ? <Loader size={13} className="spinner" /> : <FolderOpen size={13} />}
+                                {zipStatus === 'running' ? `Generating ZIP... ${zipProgress}%` : '📥 Download Segregated Folder'}
+                            </button>
+                        )}
                         <SegStatusBadge />
                     </div>
 

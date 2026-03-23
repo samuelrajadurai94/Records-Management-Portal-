@@ -28,6 +28,7 @@ export default function Dashboard() {
     // Unified Add Engine Modal state
     const [uploadMethod, setUploadMethod] = useState('local'); // 'local' or 'box'
     const [boxLinkUrl, setBoxLinkUrl] = useState('');
+    const [gdriveLinkUrl, setGdriveLinkUrl] = useState('');
     const [boxLinkError, setBoxLinkError] = useState('');
 
     useEffect(() => {
@@ -49,8 +50,8 @@ export default function Dashboard() {
     const handleAddEngine = async (e) => {
         e.preventDefault();
 
-        if (uploadMethod === 'box' && !boxLinkUrl.trim()) {
-            setBoxLinkError('Box shared link is required.');
+        if (uploadMethod === 'box' && !boxLinkUrl.trim() && !gdriveLinkUrl.trim()) {
+            setBoxLinkError('Please provide either a Box shared link or a Google Drive link.');
             return;
         }
 
@@ -228,7 +229,15 @@ export default function Dashboard() {
                 const formData = new FormData();
                 formData.append('serial_number', currentSerial);
                 formData.append('csn', csn || '0');
-                formData.append('box_link', boxLinkUrl);
+
+                let endpoint = '';
+                if (gdriveLinkUrl.trim()) {
+                    formData.append('gdrive_link', gdriveLinkUrl);
+                    endpoint = '/engines/import-from-gdrive';
+                } else {
+                    formData.append('box_link', boxLinkUrl);
+                    endpoint = '/engines/import-from-link';
+                }
 
                 pollInterval = setInterval(async () => {
                     try {
@@ -268,11 +277,12 @@ export default function Dashboard() {
                     }
                 }, 1500);
 
-                await api.post('/engines/import-from-link', formData);
+                await api.post(endpoint, formData);
 
                 setSerialNumber('');
                 setCsn('');
                 setBoxLinkUrl('');
+                setGdriveLinkUrl('');
                 setBoxLinkError('');
             } catch (err) {
                 if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
@@ -623,7 +633,7 @@ export default function Dashboard() {
                                     transition: 'all 0.2s'
                                 }}
                             >
-                                Box Link
+                                Cloud Link
                             </button>
                         </div>
 
@@ -684,12 +694,26 @@ export default function Dashboard() {
                                     <input
                                         placeholder="https://app.box.com/s/..."
                                         value={boxLinkUrl}
-                                        onChange={e => setBoxLinkUrl(e.target.value)}
+                                        onChange={e => { setBoxLinkUrl(e.target.value); setGdriveLinkUrl(''); }}
+                                        style={{ marginBottom: '0.5rem', width: '100%' }}
+                                    />
+                                    <small style={{ color: '#64748b', display: 'block', marginBottom: '1.5rem', lineHeight: 1.5 }}>
+                                        Paste the shared link of the folder. It must allow downloads.
+                                    </small>
+
+                                    <div style={{ textAlign: 'center', margin: '1rem 0', fontWeight: 'bold', color: '#cbd5e1' }}>OR</div>
+
+                                    <label style={{ fontWeight: 600, fontSize: '0.9rem', display: 'block', marginBottom: '6px' }}>Google Drive Folder Link</label>
+                                    <input
+                                        placeholder="https://drive.google.com/drive/folders/..."
+                                        value={gdriveLinkUrl}
+                                        onChange={e => { setGdriveLinkUrl(e.target.value); setBoxLinkUrl(''); }}
                                         style={{ marginBottom: '0.5rem', width: '100%' }}
                                     />
                                     <small style={{ color: '#64748b', display: 'block', marginBottom: '1rem', lineHeight: 1.5 }}>
-                                        Paste the shared link of the folder. It must allow downloads.
+                                        Paste a Google Drive folder link.
                                     </small>
+
                                     {boxLinkError && (
                                         <p style={{ color: '#e53e3e', fontSize: '0.875rem', marginBottom: '1rem' }}>⚠️ {boxLinkError}</p>
                                     )}

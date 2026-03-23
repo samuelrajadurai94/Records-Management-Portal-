@@ -396,6 +396,159 @@ async def import_engine_from_box_link(
 
     return db_engine
 
+def perform_gdrive_import(serial_number: str, engine_id: int, gdrive_link: str, company_name: str, db_session_factory):
+    """Background task: import a folder from a Google Drive link into our storage."""
+    try:
+        upload_progress[serial_number]["status"] = "running"
+        upload_progress[serial_number]["progress"] = 5
+
+        # Determine parent (under company or root)
+        from services.box_service import ROOT_FOLDER_ID
+        parent_id = ROOT_FOLDER_ID
+        if company_name:
+            company_folder = box_service.get_or_create_folder(company_name, ROOT_FOLDER_ID)
+            if company_folder:
+                parent_id = company_folder.id
+
+        upload_progress[serial_number]["progress"] = 15
+
+        # Create engine root folder
+        engine_root = box_service.client.folders.create_folder(
+            serial_number,
+            __import__("box_sdk_gen.managers.folders", fromlist=["CreateFolderParent"]).CreateFolderParent(id=parent_id)
+        )
+        upload_progress[serial_number]["progress"] = 30
+
+        # Create RAW FOLDER inside
+        from box_sdk_gen.managers.folders import CreateFolderParent
+        raw_folder = box_service.client.folders.create_folder(
+            "RAW FOLDER",
+            CreateFolderParent(id=engine_root.id)
+        )
+        upload_progress[serial_number]["progress"] = 40
+
+        # Create Temp Dir
+        import tempfile
+        import shutil
+        import os
+        from services.google_drive_service import download_gdrive_folder_from_link
+        temp_dir = tempfile.mkdtemp(prefix=f"gdrive_{serial_number}_")
+        total_files = 0
+
+        try:
+            # Download phase
+            def gdrive_progress_cb(downloaded_count):
+                p = upload_progress[serial_number]["progress"]
+                # Cap download progress at 50%
+                if p < 50:
+                    upload_progress[serial_number]["progress"] = p + 1
+                    
+            download_gdrive_folder_from_link(gdrive_link, temp_dir, progress_callback=gdrive_progress_cb)
+            upload_progress[serial_number]["progress"] = 50
+
+            # Count files downloaded
+            for root, _, files in os.walk(temp_dir):
+                total_files += len(files)
+            
+            upload_progress[serial_number]["total"] = total_files
+            upload_progress[serial_number]["completed"] = 0
+
+            # Upload phase
+            def box_upload_cb(percent, state):
+                p = 50 + int(percent * 0.45) # maps 0-100 to 50-95
+                upload_progress[serial_number]["progress"] = p
+                upload_progress[serial_number]["completed"] = state["current"]
+                upload_progress[serial_number]["errors"] = state["errors"]
+
+            box_service.upload_folder_contents(
+                raw_folder.id, 
+                temp_dir, 
+                progress_callback=box_upload_cb, 
+                state={"current": 0, "total": total_files, "errors": []}
+            )
+        finally:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+        upload_progress[serial_number]["progress"] = 95
+
+        # Update DB with the engine root box_folder_id
+        db = db_session_factory()
+        try:
+            eng = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
+            if eng:
+                eng.box_folder_id = engine_root.id
+                db.commit()
+        finally:
+            db.close()
+
+        upload_progress[serial_number] = {
+            "status": "done",
+            "progress": 100,
+            "completed": upload_progress[serial_number].get("completed", total_files),
+            "total": upload_progress[serial_number].get("total", total_files),
+            "errors": upload_progress[serial_number].get("errors", [])
+        }
+        print(f"[import-from-gdrive] Done for {serial_number}")
+
+    except Exception as e:
+        print(f"[import-from-gdrive] Error for {serial_number}: {e}")
+        upload_progress[serial_number] = {
+            "status": "error",
+            "progress": 0,
+            "completed": 0,
+            "total": 0,
+            "errors": [str(e)]
+        }
+
+
+@router.post("/import-from-gdrive", response_model=schemas.Engine)
+async def import_engine_from_gdrive_link(
+    background_tasks: BackgroundTasks,
+    serial_number: str = Form(...),
+    gdrive_link: str = Form(...),
+    csn: int = Form(0),
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user)
+):
+    """Import an engine folder from a Google Drive link into our Box storage."""
+    # Check for duplicate
+    existing = db.query(models.Engine).filter(models.Engine.serial_number == serial_number).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Engine with this serial number already exists")
+    
+    # Create engine record
+    db_engine = models.Engine(
+        model_name=serial_number,
+        serial_number=serial_number,
+        csn_value=csn,
+        owner_id=current_user.id,
+        box_folder_id=None
+    )
+    db.add(db_engine)
+    db.commit()
+    db.refresh(db_engine)
+
+    # Init progress
+    upload_progress[serial_number] = {
+        "status": "running",
+        "progress": 5,
+        "completed": 0,
+        "total": 1,
+        "errors": []
+    }
+
+    background_tasks.add_task(
+        perform_gdrive_import,
+        serial_number,
+        db_engine.id,
+        gdrive_link,
+        current_user.company_name,
+        database.SessionLocal
+    )
+
+    return db_engine
+
 @router.get("/{engine_id}", response_model=schemas.Engine)
 def read_engine(engine_id: int, db: Session = Depends(database.get_db), current_user: models.User = Depends(dependencies.get_current_user)):
     engine = db.query(models.Engine).filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id).first()
