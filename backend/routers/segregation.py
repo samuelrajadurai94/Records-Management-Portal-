@@ -389,6 +389,9 @@ from threading import Thread
 # Global dict to store download zip tasks
 zip_tasks = {}
 
+# Global dict to store box export tasks
+box_export_tasks = {}
+
 def _build_segregation_zip(engine_id: int, category: str = None):
     # This requires its own db session
     from database import SessionLocal
@@ -551,3 +554,156 @@ def download_segregation_zip(
         filename=task.get("zip_filename", f"Segregated_Folder.zip"),
         media_type="application/zip",
     )
+
+def _export_segregation_to_box(engine_id: int):
+    # This requires its own db session
+    from database import SessionLocal
+    db = SessionLocal()
+    
+    try:
+        from services.box_service import box_service
+        from box_sdk_gen.managers.files import CopyFileParent
+        
+        # 1. Fetch engine
+        engine = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
+        if not engine:
+            box_export_tasks[engine_id] = {"status": "error", "progress": 0, "error": "Engine not found"}
+            return
+            
+        if not engine.box_folder_id:
+            box_export_tasks[engine_id] = {"status": "error", "progress": 0, "error": "Engine has no Box folder linked"}
+            return
+            
+        rows = db.query(models.SegregationResult).filter(models.SegregationResult.engine_id == engine_id, models.SegregationResult.box_file_id.isnot(None)).all()
+        if not rows:
+            box_export_tasks[engine_id] = {"status": "error", "progress": 0, "error": "No segregated files to export"}
+            return
+            
+        # 1. Create root "Segregated Folder"
+        root_folder = box_service.get_or_create_folder("Segregated Folder", engine.box_folder_id)
+        if not root_folder:
+            box_export_tasks[engine_id] = {"status": "error", "progress": 0, "error": "Could not create root Segregated Folder in Box"}
+            return
+            
+        # 2. Build unique folder paths
+        TREE_METHODS = {"Folder Match", "Extension", "Unclassified", "Manual"}
+        folder_paths = set()
+        file_destinations = [] # (row, expected_folder_path)
+        
+        for row in rows:
+            safe_category = "".join(c for c in row.category if c not in r'<>:"/\|?*').strip()
+            
+            if row.latest:
+                folder_path = f"{safe_category}/⭐ Latest"
+            elif row.method in TREE_METHODS:
+                path_str = row.original_folder_path or ""
+                parts = [p.strip() for p in path_str.split("/") if p.strip()]
+                # UI logic: skip the first segment (root/engine folder)
+                sub_parts = parts[1:] if len(parts) > 0 else []
+                sub_parts = ["".join(c for c in p if c not in r'<>:"/\|?*').strip() for p in sub_parts]
+                if sub_parts:
+                    folder_path = f"{safe_category}/" + "/".join(sub_parts)
+                else:
+                    folder_path = safe_category
+            else:
+                # Flat files
+                folder_path = safe_category
+                
+            # Add all parent paths to ensure creation
+            parts = folder_path.split('/')
+            for i in range(1, len(parts) + 1):
+                folder_paths.add('/'.join(parts[:i]))
+                
+            file_destinations.append((row, folder_path))
+            
+        # 3. Create structure
+        box_export_tasks[engine_id]["progress"] = 10
+        # folder_mapping maps "Category/⭐ Latest" -> "12345"
+        folder_mapping = box_service.create_folder_structure(root_folder.id, list(folder_paths))
+        
+        # 4. Copy files
+        total = len(file_destinations)
+        for i, (row, folder_path) in enumerate(file_destinations):
+            dest_folder_id = folder_mapping.get(folder_path)
+            if not dest_folder_id:
+                # Fallback to the newly created root folder if path parsing totally failed
+                dest_folder_id = root_folder.id 
+                
+            file_name = row.box_file_name or f"file_{row.box_file_id}.pdf"
+            
+            try:
+                # box-sdk-gen structure for copying file
+                box_service.client.files.copy_file(
+                    file_id=row.box_file_id,
+                    parent=CopyFileParent(id=dest_folder_id),
+                    name=file_name
+                )
+            except Exception as e:
+                err_str = str(e).lower()
+                # 409 Conflict simply means it was already copied there. Continue.
+                if "item_name_in_use" not in err_str and "409" not in err_str:
+                    print(f"Failed to copy file {file_name}: {e}")
+                    
+            # 10%-100%
+            box_export_tasks[engine_id]["progress"] = 10 + int(((i + 1) / total) * 90)
+            
+        box_export_tasks[engine_id] = {
+            "status": "done",
+            "progress": 100,
+            "error": None
+        }
+        
+    except Exception as e:
+        print(f"Box export failed for {engine_id}: {e}")
+        box_export_tasks[engine_id] = {"status": "error", "progress": 0, "error": str(e)}
+    finally:
+        db.close()
+
+@router.post("/start-box-export/{engine_id}")
+def start_box_export(
+    engine_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    engine = db.query(models.Engine).filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id).first()
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+        
+    if engine_id in box_export_tasks and box_export_tasks[engine_id]["status"] == "running":
+        return {"message": "Export already in progress"}
+        
+    box_export_tasks[engine_id] = {"status": "running", "progress": 0, "error": None}
+    
+    thread = Thread(target=_export_segregation_to_box, args=(engine_id,))
+    thread.start()
+    
+    return {"message": "Box export started"}
+
+@router.get("/box-export-status/{engine_id}")
+def check_box_export_status(
+    engine_id: int,
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    if engine_id not in box_export_tasks:
+        return {"status": "idle", "progress": 0}
+    return box_export_tasks[engine_id]
+
+@router.get("/saved-to-box-status/{engine_id}")
+def check_saved_to_box_status(
+    engine_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """Checks if a 'Segregated Folder' exists in the Engine's root folder"""
+    from services.box_service import box_service
+    engine = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
+    if not engine or not engine.box_folder_id:
+        return {"saved": False}
+        
+    try:
+        items = box_service.get_folder_items(engine.box_folder_id)
+        has_segregated = any(f["name"] == "Segregated Folder" for f in items.get("folders", []))
+        return {"saved": has_segregated}
+    except Exception as e:
+        print(f"Error checking saved status: {e}")
+        return {"saved": False}

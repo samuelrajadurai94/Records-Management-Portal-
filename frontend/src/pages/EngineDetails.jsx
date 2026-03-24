@@ -4,7 +4,7 @@ import api from '../api';
 import {
     FileText, Folder, FolderOpen, ChevronRight, ChevronDown,
     ArrowLeft, Search, SortAsc, CheckSquare, LogOut, Loader, X,
-    Shuffle, CheckCircle, AlertCircle, Info, Clock, Save, Edit3, Eye, ShieldAlert, Settings, Download
+    Shuffle, CheckCircle, AlertCircle, Info, Clock, Save, Edit3, Eye, ShieldAlert, Settings, Download, Cloud
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -828,6 +828,12 @@ export default function EngineDetails() {
     const [zipProgress, setZipProgress] = useState(0);
     const [zipPollInterval, setZipPollInterval] = useState(null);
 
+    // Box Export state
+    const [boxExportStatus, setBoxExportStatus] = useState('idle'); // idle|running|done|error
+    const [boxExportProgress, setBoxExportProgress] = useState(0);
+    const [boxExportPollInterval, setBoxExportPollInterval] = useState(null);
+    const [isBoxSaved, setIsBoxSaved] = useState(false);
+
     // Filter-level Zip state
     const [folderZipStatus, setFolderZipStatus] = useState({}); // { [category]: 'running'|'done'|'idle'|'error' }
     const [folderZipProgress, setFolderZipProgress] = useState({}); // { [category]: number }
@@ -848,7 +854,12 @@ export default function EngineDetails() {
     // Per-file processing: { [file_id]: { status: 'idle'|'processing'|'error', message: '' } }
     const [fileProcessing, setFileProcessing] = useState({});
 
-    const tabs = ['RAW FOLDER', 'FOLDER SEGREGATION', 'META DATA TAGGING', 'LLP STATUS', 'OPEN ITEM LIST', 'LLP TRACE', 'MINIPACK'];
+    // Folder-level metadata pipeline state
+    const [schemaCategories, setSchemaCategories] = useState(new Set());
+    const [folderPipelineStatus, setFolderPipelineStatus] = useState({}); // { [category]: 'idle'|'running'|'done'|'error' }
+    const [folderPipelineProgress, setFolderPipelineProgress] = useState({}); // { [category]: number 0-100 }
+
+    const tabs = ['RAW FOLDER', 'FOLDER SEGREGATION', 'META DATA TAGGING', 'LLP STATUS', 'OPEN ITEM LIST', 'LLP TRACE', 'DELIVERABLES'];
 
     // ── Fetch file stats for metadata tab ──────────────────────────────────
     const fetchFileStats = useCallback(async () => {
@@ -870,6 +881,13 @@ export default function EngineDetails() {
             console.error('Failed to fetch meta files:', err);
         }
     }, [id]);
+
+    // Fetch schema-capable categories once (used to display/hide per-folder tag buttons)
+    useEffect(() => {
+        api.get('/metadata/schema-categories')
+            .then(res => setSchemaCategories(new Set(res.data.categories)))
+            .catch(() => { });
+    }, []);
 
     // Auto-fetch stats + meta files when switching to META DATA TAGGING tab
     useEffect(() => {
@@ -922,6 +940,36 @@ export default function EngineDetails() {
         }
     }, [id, fetchMetaFiles, fetchFileStats]);
 
+    // ── Folder-scoped metadata pipeline trigger ────────────────────────────
+    const handleRunFolderPipeline = async (category) => {
+        if (folderPipelineStatus[category] === 'running') return;
+        setFolderPipelineStatus(prev => ({ ...prev, [category]: 'running' }));
+        setFolderPipelineProgress(prev => ({ ...prev, [category]: 0 }));
+        try {
+            await api.post(`/metadata/pipeline/folder/${id}?category=${encodeURIComponent(category)}`);
+            const interval = setInterval(async () => {
+                try {
+                    const res = await api.get(`/metadata/pipeline/folder/status/${id}?category=${encodeURIComponent(category)}`);
+                    const data = res.data;
+                    setFolderPipelineProgress(prev => ({ ...prev, [category]: data.progress || 0 }));
+                    if (data.status === 'done') {
+                        clearInterval(interval);
+                        setFolderPipelineStatus(prev => ({ ...prev, [category]: 'done' }));
+                        fetchMetaFiles();
+                        fetchFileStats();
+                        setTimeout(() => setFolderPipelineStatus(prev => ({ ...prev, [category]: 'idle' })), 4000);
+                    } else if (data.status === 'error') {
+                        clearInterval(interval);
+                        setFolderPipelineStatus(prev => ({ ...prev, [category]: 'error' }));
+                    }
+                } catch (e) { console.error('Folder pipeline poll err', e); }
+            }, 3000);
+        } catch (err) {
+            console.error('Failed to start folder pipeline:', err);
+            setFolderPipelineStatus(prev => ({ ...prev, [category]: 'error' }));
+        }
+    };
+
     // ── Fetch engine + Box structure ─────────────────────────────────────
     const fetchEngineData = useCallback(async () => {
         setLoading(true);
@@ -952,10 +1000,18 @@ export default function EngineDetails() {
         } catch (_) { }
     }, [id]);
 
+    const checkBoxSavedStatus = useCallback(async () => {
+        try {
+            const res = await api.get(`/segregation/saved-to-box-status/${id}`);
+            setIsBoxSaved(Boolean(res.data.saved));
+        } catch (_) { }
+    }, [id]);
+
     useEffect(() => {
         fetchEngineData();
         fetchExistingResults();
-    }, [id]);
+        checkBoxSavedStatus();
+    }, [id, fetchEngineData, fetchExistingResults, checkBoxSavedStatus]);
 
     // Cleanup polling on unmount
     useEffect(() => {
@@ -1040,6 +1096,41 @@ export default function EngineDetails() {
         } catch (err) {
             setZipStatus('error');
             console.error("Start zip failed", err);
+        }
+    };
+
+    // ── Save Segregated Folder to Box trigger ─────────────────────────────
+    const handleSaveToBox = async () => {
+        if (boxExportStatus === 'running') return;
+        setBoxExportStatus('running');
+        setBoxExportProgress(0);
+        try {
+            await api.post(`/segregation/start-box-export/${id}`);
+            const interval = setInterval(async () => {
+                try {
+                    const statusRes = await api.get(`/segregation/box-export-status/${id}`);
+                    const { status, progress } = statusRes.data;
+                    setBoxExportProgress(progress || 0);
+
+                    if (status === 'done') {
+                        clearInterval(interval);
+                        setBoxExportPollInterval(null);
+                        setBoxExportStatus('done');
+                        setIsBoxSaved(true);
+                        setTimeout(() => setBoxExportStatus('idle'), 4000);
+                    } else if (status === 'error') {
+                        clearInterval(interval);
+                        setBoxExportPollInterval(null);
+                        setBoxExportStatus('error');
+                    }
+                } catch (e) {
+                    console.error("Poll box export err", e);
+                }
+            }, 3000);
+            setBoxExportPollInterval(interval);
+        } catch (err) {
+            setBoxExportStatus('error');
+            console.error("Start box export failed", err);
         }
     };
 
@@ -2050,6 +2141,33 @@ export default function EngineDetails() {
                                 {files.some(hasMetadata) && (
                                     <span style={{ fontSize: '0.65rem', marginLeft: '3px', flexShrink: 0 }}>🏷️</span>
                                 )}
+                                {schemaCategories.has(category) && (
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); handleRunFolderPipeline(category); }}
+                                        disabled={folderPipelineStatus[category] === 'running'}
+                                        title={`Run metadata tagging for ${category}`}
+                                        style={{
+                                            marginLeft: '5px', flexShrink: 0,
+                                            background: folderPipelineStatus[category] === 'done' ? '#10b981'
+                                                : folderPipelineStatus[category] === 'error' ? '#ef4444'
+                                                    : folderPipelineStatus[category] === 'running' ? '#94a3b8'
+                                                        : '#6366f1',
+                                            color: 'white', border: 'none',
+                                            borderRadius: '5px', padding: '2px 7px',
+                                            fontSize: '0.62rem', fontWeight: 700,
+                                            cursor: folderPipelineStatus[category] === 'running' ? 'not-allowed' : 'pointer',
+                                            display: 'flex', alignItems: 'center', gap: '3px',
+                                        }}
+                                    >
+                                        {folderPipelineStatus[category] === 'running'
+                                            ? <><Loader size={9} className="spinner" /> {folderPipelineProgress[category] || 0}%</>
+                                            : folderPipelineStatus[category] === 'done'
+                                                ? '✅'
+                                                : folderPipelineStatus[category] === 'error'
+                                                    ? '❌'
+                                                    : ' Meta-Tag'}
+                                    </button>
+                                )}
                             </div>
 
                             {/* Expanded content — mirrors SegCategoryTree exactly */}
@@ -2671,22 +2789,40 @@ export default function EngineDetails() {
                         </button>
 
                         {segStatus === 'done' && (
-                            <button
-                                onClick={handleDownloadZip}
-                                disabled={zipStatus === 'running'}
-                                style={{
-                                    display: 'flex', alignItems: 'center', gap: '8px',
-                                    padding: '7px 16px', borderRadius: '8px', border: 'none',
-                                    background: zipStatus === 'running' ? '#94a3b8' : '#16a34a',
-                                    color: 'white', fontWeight: 700, fontSize: '0.8rem',
-                                    cursor: zipStatus === 'running' ? 'not-allowed' : 'pointer',
-                                    boxShadow: '0 2px 6px rgba(22,163,74,0.25)',
-                                    marginLeft: 'auto'
-                                }}
-                            >
-                                {zipStatus === 'running' ? <Loader size={13} className="spinner" /> : <FolderOpen size={13} />}
-                                {zipStatus === 'running' ? `Generating ZIP... ${zipProgress}%` : '📥 Download Segregated Folder'}
-                            </button>
+                            <div style={{ display: 'flex', gap: '10px', marginLeft: 'auto' }}>
+                                <button
+                                    onClick={handleSaveToBox}
+                                    disabled={boxExportStatus === 'running' || isBoxSaved}
+                                    style={{
+                                        display: 'flex', alignItems: 'center', gap: '8px',
+                                        padding: '7px 16px', borderRadius: '8px', border: 'none',
+                                        background: isBoxSaved ? '#10b981' : (boxExportStatus === 'running' ? '#94a3b8' : '#0ea5e9'),
+                                        color: 'white', fontWeight: 700, fontSize: '0.8rem',
+                                        cursor: (boxExportStatus === 'running' || isBoxSaved) ? 'not-allowed' : 'pointer',
+                                        boxShadow: isBoxSaved ? '0 2px 6px rgba(16,185,129,0.3)' : '0 2px 6px rgba(14,165,233,0.3)',
+                                    }}
+                                >
+                                    {boxExportStatus === 'running' ? <Loader size={13} className="spinner" /> : (isBoxSaved ? <CheckCircle size={13} /> : <Cloud size={13} />)}
+                                    {boxExportStatus === 'running'
+                                        ? `Saving to Box... ${boxExportProgress}%`
+                                        : (isBoxSaved ? '✅ Saved to Box' : '☁️ Save to Box')}
+                                </button>
+                                <button
+                                    onClick={handleDownloadZip}
+                                    disabled={zipStatus === 'running'}
+                                    style={{
+                                        display: 'flex', alignItems: 'center', gap: '8px',
+                                        padding: '7px 16px', borderRadius: '8px', border: 'none',
+                                        background: zipStatus === 'running' ? '#94a3b8' : '#16a34a',
+                                        color: 'white', fontWeight: 700, fontSize: '0.8rem',
+                                        cursor: zipStatus === 'running' ? 'not-allowed' : 'pointer',
+                                        boxShadow: '0 2px 6px rgba(22,163,74,0.25)',
+                                    }}
+                                >
+                                    {zipStatus === 'running' ? <Loader size={13} className="spinner" /> : <FolderOpen size={13} />}
+                                    {zipStatus === 'running' ? `Generating ZIP... ${zipProgress}%` : '📥 Download Segregated Folder'}
+                                </button>
+                            </div>
                         )}
                         <SegStatusBadge />
                     </div>

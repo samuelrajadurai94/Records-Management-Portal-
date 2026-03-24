@@ -354,3 +354,74 @@ def process_single_file(
         raise HTTPException(status_code=500, detail=result["error"])
 
     return result
+
+
+# ─────────────────────────────────────────────────────────────
+# FOLDER-SCOPED PIPELINE ENDPOINTS
+# ─────────────────────────────────────────────────────────────
+
+@router.get("/schema-categories")
+def list_schema_categories(
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """Returns the list of category names that have a Pydantic schema for metadata tagging."""
+    return {"categories": list(meta_service.Pydantic_Schema_mapping_dict.keys())}
+
+
+@router.post("/pipeline/folder/{engine_id}")
+def start_folder_pipeline(
+    engine_id: int,
+    category: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Start the metadata pipeline for a single category folder.
+    Extracts text for PDFs in the category that don't have it yet,
+    then runs Gemini tagging using the category's Pydantic schema.
+    """
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    if category not in meta_service.Pydantic_Schema_mapping_dict:
+        raise HTTPException(status_code=400, detail=f"No schema available for category '{category}'")
+
+    current = meta_service.get_folder_pipeline_status(engine_id, category)
+    if current["status"] == "running":
+        return {"message": "Folder pipeline already running", "status": "running"}
+
+    def run_task():
+        bg_db = next(database.get_db())
+        try:
+            meta_service.perform_folder_pipeline(engine_id, category, bg_db)
+        finally:
+            bg_db.close()
+
+    background_tasks.add_task(run_task)
+    return {"message": f"Folder pipeline started for '{category}'", "status": "running"}
+
+
+@router.get("/pipeline/folder/status/{engine_id}")
+def get_folder_pipeline_status(
+    engine_id: int,
+    category: str,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """Returns the current status of the folder-scoped metadata pipeline."""
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    return meta_service.get_folder_pipeline_status(engine_id, category)
+
