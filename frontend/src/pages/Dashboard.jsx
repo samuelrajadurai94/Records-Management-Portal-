@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plane, Plus, LogOut, ArrowRight, LayoutGrid, HardDrive, Clock, Star, Trash2, Users, ChevronLeft, ChevronRight, Settings, Link2 } from 'lucide-react';
+import { Plane, Plus, LogOut, ArrowRight, LayoutGrid, HardDrive, Clock, Star, Trash2, Users, ChevronLeft, ChevronRight, Settings, Link2, Search, X, FileText, Loader, ExternalLink } from 'lucide-react';
 
 export default function Dashboard() {
     const [engines, setEngines] = useState([]);
@@ -31,6 +31,15 @@ export default function Dashboard() {
     const [gdriveLinkUrl, setGdriveLinkUrl] = useState('');
     const [boxLinkError, setBoxLinkError] = useState('');
 
+    // ── Global search state ──────────────────────────────────────────────────
+    const [globalQuery, setGlobalQuery] = useState('');
+    const [globalResults, setGlobalResults] = useState([]);
+    const [globalSearching, setGlobalSearching] = useState(false);
+    const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+    const [globalSelectedFile, setGlobalSelectedFile] = useState(null);
+    const [globalSearchError, setGlobalSearchError] = useState('');
+    const [globalEmbedLoading, setGlobalEmbedLoading] = useState(false);
+
     useEffect(() => {
         fetchEngines();
     }, []);
@@ -45,6 +54,52 @@ export default function Dashboard() {
     };
 
     const [uploadStage, setUploadStage] = useState('');
+
+    // ── Global search handler ────────────────────────────────────────────────
+    const handleGlobalSearch = async (queryOverride) => {
+        const q = (queryOverride ?? globalQuery).trim();
+        if (!q) return;
+        setGlobalSearching(true);
+        setGlobalSearchError('');
+        setGlobalSelectedFile(null);
+        setGlobalResults([]);
+        // Open overlay immediately so user sees loading state inside
+        setGlobalSearchOpen(true);
+        try {
+            const res = await api.get(`/segregation/global-search?q=${encodeURIComponent(q)}`);
+            setGlobalResults(res.data);
+            if (res.data.length === 0) setGlobalSearchError('No matching files found.');
+        } catch (err) {
+            console.error(err);
+            setGlobalSearchError('Search failed. Please try again.');
+        } finally {
+            setGlobalSearching(false);
+        }
+    };
+
+    // On-demand embed + download URL fetch when a file is selected
+    const handleSelectGlobalFile = async (file) => {
+        setGlobalSelectedFile({ ...file, embed_link: null, download_url: null });
+        setGlobalEmbedLoading(true);
+        try {
+            const res = await api.get(`/segregation/file-embed/${file.box_file_id}`);
+            setGlobalSelectedFile(prev => prev?.id === file.id
+                ? { ...prev, embed_link: res.data.embed_link, download_url: res.data.download_url }
+                : prev
+            );
+        } catch (e) {
+            console.error('Embed fetch failed', e);
+        } finally {
+            setGlobalEmbedLoading(false);
+        }
+    };
+
+    // Close overlay on Escape
+    React.useEffect(() => {
+        const handler = (e) => { if (e.key === 'Escape') setGlobalSearchOpen(false); };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+    }, []);
 
 
     const handleAddEngine = async (e) => {
@@ -410,11 +465,126 @@ export default function Dashboard() {
                         </h2>
                         <p style={{ color: 'var(--text-dim)' }}>Manage your aircraft records securely.</p>
                     </div>
-                    <div style={{ display: 'flex', gap: '1rem' }}>
+                    <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+
+                        {/* ══ Premium Global Search Bar ══ */}
+                        <div style={{
+                            display: 'flex', alignItems: 'center',
+                            background: 'linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(234,244,255,0.98) 100%)',
+                            borderRadius: '50px',
+                            border: '1.5px solid rgba(2,62,138,0.18)',
+                            boxShadow: '0 4px 24px rgba(2,62,138,0.12), 0 1px 4px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.9)',
+                            overflow: 'hidden',
+                            transition: 'all 0.3s ease',
+                            position: 'relative',
+                        }}
+                            onFocus={(e) => {
+                                e.currentTarget.style.boxShadow = '0 6px 32px rgba(2,62,138,0.22), 0 0 0 3px rgba(2,62,138,0.12)';
+                                e.currentTarget.style.borderColor = 'rgba(2,62,138,0.45)';
+                            }}
+                            onBlur={(e) => {
+                                e.currentTarget.style.boxShadow = '0 4px 24px rgba(2,62,138,0.12), 0 1px 4px rgba(0,0,0,0.06)';
+                                e.currentTarget.style.borderColor = 'rgba(2,62,138,0.18)';
+                            }}
+                        >
+                            {/* Left search icon decorator */}
+                            <div style={{
+                                paddingLeft: '18px', paddingRight: '6px',
+                                display: 'flex', alignItems: 'center',
+                                color: '#023e8a', opacity: 0.55, flexShrink: 0,
+                            }}>
+                                <Search size={17} strokeWidth={2.5} />
+                            </div>
+
+                            {/* Input */}
+                            <input
+                                type="text"
+                                placeholder="Search files across all engines — serial no., keywords, dates…"
+                                value={globalQuery}
+                                onChange={e => setGlobalQuery(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') handleGlobalSearch(); }}
+                                style={{
+                                    border: 'none', outline: 'none',
+                                    padding: '12px 10px 12px 4px',
+                                    fontSize: '0.87rem', width: '480px',
+                                    background: 'transparent',
+                                    color: '#1e3a5f',
+                                    letterSpacing: '0.01em',
+                                }}
+                            />
+
+                            {/* Keyboard hint badge */}
+                            {!globalQuery && (
+                                <span style={{
+                                    fontSize: '0.68rem', color: '#94a3b8',
+                                    background: '#f1f5f9',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '6px', padding: '2px 7px',
+                                    marginRight: '10px', flexShrink: 0,
+                                    fontFamily: 'monospace', letterSpacing: '0.05em',
+                                }}>↵ Enter</span>
+                            )}
+
+                            {/* Clear button — visible when there's text */}
+                            {globalQuery && (
+                                <button
+                                    onClick={() => setGlobalQuery('')}
+                                    style={{
+                                        background: 'none', border: 'none',
+                                        color: '#94a3b8', cursor: 'pointer',
+                                        padding: '0 6px 0 2px', display: 'flex',
+                                        alignItems: 'center', flexShrink: 0,
+                                    }}
+                                    title="Clear"
+                                >
+                                    <X size={14} />
+                                </button>
+                            )}
+
+                            {/* Search trigger button */}
+                            <button
+                                onClick={() => handleGlobalSearch()}
+                                disabled={globalSearching}
+                                title="Search (Enter)"
+                                style={{
+                                    background: globalSearching
+                                        ? 'linear-gradient(135deg, #64748b, #475569)'
+                                        : 'linear-gradient(135deg, #023e8a 0%, #0077b6 100%)',
+                                    border: 'none',
+                                    borderRadius: '50%',
+                                    width: '40px', height: '40px',
+                                    margin: '4px',
+                                    flexShrink: 0,
+                                    cursor: globalSearching ? 'wait' : 'pointer',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    color: 'white',
+                                    boxShadow: globalSearching ? 'none' : '0 3px 12px rgba(2,62,138,0.45)',
+                                    transition: 'all 0.25s ease',
+                                    position: 'relative',
+                                    overflow: 'visible',
+                                }}
+                                onMouseEnter={(e) => {
+                                    if (!globalSearching) {
+                                        e.currentTarget.style.transform = 'scale(1.08)';
+                                        e.currentTarget.style.boxShadow = '0 5px 18px rgba(2,62,138,0.55)';
+                                    }
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.currentTarget.style.transform = 'scale(1)';
+                                    e.currentTarget.style.boxShadow = '0 3px 12px rgba(2,62,138,0.45)';
+                                }}
+                            >
+                                {globalSearching
+                                    ? <Loader size={17} style={{ animation: 'spin 0.8s linear infinite' }} />
+                                    : <Search size={17} strokeWidth={2.5} />}
+                            </button>
+                        </div>
+
                         <button className="btn btn-outline" style={{ borderRadius: '50%', width: '40px', height: '40px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                             <Settings size={20} />
                         </button>
                     </div>
+
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
@@ -771,6 +941,235 @@ export default function Dashboard() {
                             >
                                 Delete Engine
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── GLOBAL SEARCH RESULTS OVERLAY ─────────────────────────────── */}
+            {globalSearchOpen && (
+                <div style={{
+                    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+                    backdropFilter: 'blur(6px)', zIndex: 200,
+                    display: 'flex', flexDirection: 'column',
+                }}>
+                    {/* Overlay header */}
+                    <div style={{
+                        background: 'linear-gradient(135deg, #023e8a, #0077b6)',
+                        color: 'white', padding: '0.8rem 1.5rem',
+                        display: 'flex', alignItems: 'center', gap: '1rem', flexShrink: 0,
+                    }}>
+                        <Search size={18} />
+                        <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>
+                            Global Search — <em style={{ fontWeight: 400 }}>"{globalQuery}"</em>
+                        </span>
+                        <span style={{ marginLeft: '6px', background: 'rgba(255,255,255,0.2)', borderRadius: '12px', padding: '1px 10px', fontSize: '0.8rem' }}>
+                            {globalSearching ? 'Searching…' : `${globalResults.length} result${globalResults.length !== 1 ? 's' : ''}`}
+                        </span>
+                        {/* Re-search bar inside overlay */}
+                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.12)', borderRadius: '8px', overflow: 'hidden', maxWidth: '420px' }}>
+                            <input
+                                type="text"
+                                value={globalQuery}
+                                onChange={e => setGlobalQuery(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') handleGlobalSearch(); }}
+                                style={{
+                                    flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                                    padding: '7px 12px', color: 'white', fontSize: '0.85rem',
+                                }}
+                            />
+                            <button
+                                onClick={() => handleGlobalSearch()}
+                                style={{ background: 'none', border: 'none', color: 'white', padding: '0 12px', cursor: 'pointer' }}
+                            >
+                                <Search size={14} />
+                            </button>
+                        </div>
+                        <button
+                            onClick={() => setGlobalSearchOpen(false)}
+                            style={{
+                                marginLeft: 'auto', background: 'rgba(255,255,255,0.15)', border: 'none',
+                                borderRadius: '50%', width: '32px', height: '32px',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                cursor: 'pointer', color: 'white',
+                            }}
+                            title="Close (Esc)"
+                        ><X size={18} /></button>
+                    </div>
+
+                    {/* Body: sidebar + viewer */}
+                    <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+
+                        {/* Left sidebar — result list */}
+                        <div style={{
+                            width: '340px', background: '#f8fafc',
+                            borderRight: '1px solid #e2e8f0',
+                            overflowY: 'auto', flexShrink: 0,
+                        }}>
+                            {/* Searching loading skeleton */}
+                            {globalSearching && (
+                                <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    {[1, 2, 3, 4, 5].map(i => (
+                                        <div key={i} style={{ background: '#f1f5f9', borderRadius: '8px', padding: '14px 12px', opacity: 1 - i * 0.12 }}>
+                                            <div style={{ height: '10px', background: '#e2e8f0', borderRadius: '6px', marginBottom: '8px', width: '80%' }} />
+                                            <div style={{ height: '8px', background: '#e2e8f0', borderRadius: '6px', width: '60%' }} />
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            {!globalSearching && globalSearchError && (
+                                <div style={{ padding: '2rem', textAlign: 'center', color: '#64748b', fontSize: '0.9rem' }}>
+                                    <Search size={40} style={{ opacity: 0.3, marginBottom: '1rem', display: 'block', margin: '0 auto 1rem' }} />
+                                    {globalSearchError}
+                                </div>
+                            )}
+                            {!globalSearching && globalResults.map((file, idx) => {
+                                const isSelected = globalSelectedFile?.id === file.id;
+                                const isPDF = file.box_file_name?.toLowerCase().endsWith('.pdf');
+                                return (
+                                    <div
+                                        key={file.id}
+                                        onClick={() => handleSelectGlobalFile(file)}
+                                        style={{
+                                            padding: '12px 14px',
+                                            borderBottom: '1px solid #e2e8f0',
+                                            cursor: 'pointer',
+                                            background: isSelected ? '#e8f0fe' : 'white',
+                                            borderLeft: isSelected ? '3px solid #023e8a' : '3px solid transparent',
+                                            transition: 'background 0.15s',
+                                        }}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                                            <FileText size={18} color={isSelected ? '#023e8a' : '#94a3b8'} style={{ flexShrink: 0, marginTop: '2px' }} />
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{ fontWeight: 600, fontSize: '0.82rem', color: '#1e293b', wordBreak: 'break-word', marginBottom: '4px' }}>
+                                                    {file.box_file_name}
+                                                </div>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
+                                                    {/* Engine serial badge — click to open engine */}
+                                                    <a
+                                                        href={`/engine/${file.engine_id}`}
+                                                        onClick={e => e.stopPropagation()}
+                                                        title="Open Engine"
+                                                        style={{
+                                                            fontSize: '0.68rem', background: '#023e8a', color: 'white',
+                                                            borderRadius: '12px', padding: '1px 8px', fontWeight: 700,
+                                                            textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '3px'
+                                                        }}
+                                                    >
+                                                        ✈️ {file.engine_serial_number} <ExternalLink size={9} />
+                                                    </a>
+                                                    <span style={{ fontSize: '0.68rem', background: '#ede9fe', color: '#7c3aed', borderRadius: '12px', padding: '1px 8px', fontWeight: 600 }}>
+                                                        {file.category}
+                                                    </span>
+                                                    {file.latest && <span style={{ fontSize: '0.68rem', background: '#fef9c3', color: '#854d0e', borderRadius: '12px', padding: '1px 8px', fontWeight: 600 }}>⭐ Latest</span>}
+                                                    {!isPDF && <span style={{ fontSize: '0.68rem', background: '#f1f5f9', color: '#64748b', borderRadius: '12px', padding: '1px 8px' }}>Non-PDF</span>}
+                                                </div>
+                                                <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                                                    Score: <strong style={{ color: '#0369a1' }}>{file.score}</strong>
+                                                    {' · '}{file.match_reasons.slice(0, 2).join(' · ')}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        {/* Right — PDF viewer */}
+                        <div style={{ flex: 1, background: '#1e293b', position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                            {/* Overlay-level search loading */}
+                            {globalSearching && !globalSelectedFile ? (
+                                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#94a3b8', gap: '1.5rem' }}>
+                                    <Loader size={48} style={{ animation: 'spin 0.9s linear infinite', color: '#0ea5e9' }} />
+                                    <div style={{ textAlign: 'center' }}>
+                                        <h3 style={{ color: '#cbd5e1', marginBottom: '0.4rem', fontWeight: 600 }}>Searching all engines…</h3>
+                                        <p style={{ fontSize: '0.85rem', opacity: 0.7 }}>This may take a few seconds</p>
+                                    </div>
+                                </div>
+                            ) : !globalSelectedFile ? (
+                                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#94a3b8', textAlign: 'center', padding: '3rem' }}>
+                                    <FileText size={64} style={{ opacity: 0.2, marginBottom: '1.5rem' }} />
+                                    <h3 style={{ color: '#cbd5e1', marginBottom: '0.5rem', fontWeight: 600 }}>Select a file to preview</h3>
+                                    <p style={{ fontSize: '0.9rem', maxWidth: '300px', lineHeight: 1.6 }}>Click any result on the left to open its PDF preview here.</p>
+                                </div>
+                            ) : (
+                                <>
+                                    {/* File info bar */}
+                                    <div style={{
+                                        background: '#0f172a', color: 'white', padding: '8px 16px',
+                                        display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0,
+                                        borderBottom: '1px solid #334155',
+                                    }}>
+                                        <FileText size={16} color="#94a3b8" />
+                                        <span style={{ fontWeight: 600, fontSize: '0.82rem', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {globalSelectedFile.box_file_name}
+                                        </span>
+                                        <span style={{ fontSize: '0.72rem', background: '#1e3a5f', borderRadius: '8px', padding: '2px 10px', color: '#93c5fd', whiteSpace: 'nowrap' }}>
+                                            ✈️ {globalSelectedFile.engine_serial_number}
+                                        </span>
+                                        {globalSelectedFile.download_url && (
+                                            <a
+                                                href={globalSelectedFile.download_url}
+                                                target="_blank" rel="noopener noreferrer"
+                                                style={{
+                                                    background: '#16a34a', color: 'white', borderRadius: '6px',
+                                                    padding: '5px 12px', fontSize: '0.75rem', fontWeight: 700,
+                                                    textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0,
+                                                }}
+                                            >
+                                                ⬇ Download
+                                            </a>
+                                        )}
+                                        <a
+                                            href={`/engine/${globalSelectedFile.engine_id}`}
+                                            target="_blank" rel="noopener noreferrer"
+                                            style={{
+                                                background: '#023e8a', color: 'white', borderRadius: '6px',
+                                                padding: '5px 12px', fontSize: '0.75rem', fontWeight: 700,
+                                                textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0,
+                                            }}
+                                        >
+                                            Open Engine <ExternalLink size={11} />
+                                        </a>
+                                    </div>
+
+                                    {/* Match reasons */}
+                                    <div style={{ background: '#0f172a', padding: '6px 16px', borderBottom: '1px solid #1e293b', display: 'flex', flexWrap: 'wrap', gap: '6px', flexShrink: 0 }}>
+                                        {globalSelectedFile.match_reasons.map((r, i) => (
+                                            <span key={i} style={{ fontSize: '0.68rem', background: '#1e293b', color: '#94a3b8', borderRadius: '10px', padding: '2px 9px', border: '1px solid #334155' }}>✓ {r}</span>
+                                        ))}
+                                    </div>
+
+                                    {/* Embed loading spinner */}
+                                    {globalEmbedLoading ? (
+                                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1rem', color: '#94a3b8' }}>
+                                            <Loader size={40} style={{ animation: 'spin 0.9s linear infinite', color: '#0ea5e9' }} />
+                                            <p style={{ fontSize: '0.85rem' }}>Loading preview…</p>
+                                        </div>
+                                    ) : globalSelectedFile.embed_link ? (
+                                        <div style={{ flex: 1, position: 'relative' }}>
+                                            {/* Box logo masking div */}
+                                            <div style={{ position: 'absolute', top: 0, left: 0, width: '120px', height: '48px', background: 'white', zIndex: 5, pointerEvents: 'none' }} />
+                                            <iframe
+                                                key={globalSelectedFile.box_file_id}
+                                                src={globalSelectedFile.embed_link}
+                                                style={{ width: '100%', height: '100%', border: 'none' }}
+                                                title={globalSelectedFile.box_file_name}
+                                                allowFullScreen
+                                            />
+                                        </div>
+                                    ) : (
+                                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', flexDirection: 'column', gap: '1rem' }}>
+                                            <FileText size={48} style={{ opacity: 0.3 }} />
+                                            <p style={{ fontSize: '0.9rem' }}>Preview not available for this file type.</p>
+                                            {globalSelectedFile.download_url && (
+                                                <a href={globalSelectedFile.download_url} target="_blank" rel="noopener noreferrer" style={{ background: '#16a34a', color: 'white', borderRadius: '8px', padding: '10px 20px', textDecoration: 'none', fontWeight: 700 }}>⬇ Download File</a>
+                                            )}
+                                        </div>
+                                    )}
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>

@@ -1,4 +1,4 @@
-"""
+﻿"""
 routers/segregation.py
 ----------------------
 Endpoints for triggering and retrieving virtual folder segregation.
@@ -94,7 +94,7 @@ def get_segregation_status(
     # Check in-memory status first (catches actively running jobs)
     status = seg_service.get_job_status(engine_id)
     # If in-memory says "idle" but DB already has results, treat as "done"
-    # (happens after server restart or logout/login — memory is wiped but DB persists)
+    # (happens after server restart or logout/login â€” memory is wiped but DB persists)
     if status == "idle":
         has_results = (
             db.query(models.SegregationResult.id)
@@ -195,7 +195,7 @@ def get_segregation_results(
     }
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+# â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _DATE_RE = re.compile(
     r'\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b'   # 12/06/22, 12-06-2022, etc.
     r'|\b(\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2})\b'    # 2022-06-12
@@ -204,9 +204,9 @@ _DATE_RE = re.compile(
 def _parse_tokens(q: str):
     """
     Split a comma-or-space separated query into buckets:
-      dates   – anything that looks like a date pattern
-      numbers – pure numeric tokens (serial numbers, CSN, TSN …)
-      words   – everything else (keywords, category names)
+      dates   â€“ anything that looks like a date pattern
+      numbers â€“ pure numeric tokens (serial numbers, CSN, TSN â€¦)
+      words   â€“ everything else (keywords, category names)
     Returns (words, numbers, dates) all as lowercase strings.
     """
     words, numbers, dates = [], [], []
@@ -237,7 +237,27 @@ def _parse_tokens(q: str):
     return words, numbers, dates
 
 
+@router.get("/file-embed/{box_file_id}")
+def get_file_embed(
+    box_file_id: str,
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Returns a fresh Box embed link + download URL for a single file.
+    Called on-demand when the user clicks a file in the global search overlay.
+    """
+    from services.box_service import box_service as _bs
+    try:
+        embed_link = _bs.get_file_embed_link(box_file_id)
+        download_url = _bs.get_file_download_url(box_file_id)
+        return {"embed_link": embed_link, "download_url": download_url}
+    except Exception as e:
+        print(f"Error fetching embed for {box_file_id}: {e}")
+        return {"embed_link": None, "download_url": None}
+
+
 @router.get("/search/{engine_id}")
+
 def search_segregated_files(
     engine_id: int,
     q: str = Query(..., min_length=1, description="Comma or space separated keywords, numbers, dates"),
@@ -274,7 +294,7 @@ def search_segregated_files(
     #                 check lower(metadata_json::text) ILIKE %token%
     #                 check lower(box_file_name) ILIKE %token%
 
-    scores = {}        # row_id → { score, match_reasons, row_data }
+    scores = {}        # row_id â†’ { score, match_reasons, row_data }
 
     rows = (
         db.query(models.SegregationResult)
@@ -298,7 +318,7 @@ def search_segregated_files(
                 meta_text = str(row.metadata_json).lower()
 
         for token in words:
-            # Filename match (exact substring – high confidence)
+            # Filename match (exact substring â€“ high confidence)
             if token in fname:
                 score += 3
                 reasons.append(f"filename: \"{token}\"")  
@@ -427,7 +447,7 @@ def _build_segregation_zip(engine_id: int, category: str = None):
             base_path = os.path.join(temp_dir, safe_category)
             
             if row.latest:
-                target_dir = os.path.join(base_path, "⭐ Latest")
+                target_dir = os.path.join(base_path, "â­ Latest")
             elif row.method in TREE_METHODS:
                 path_str = row.original_folder_path or ""
                 parts = [p.strip() for p in path_str.split("/") if p.strip()]
@@ -594,7 +614,7 @@ def _export_segregation_to_box(engine_id: int):
             safe_category = "".join(c for c in row.category if c not in r'<>:"/\|?*').strip()
             
             if row.latest:
-                folder_path = f"{safe_category}/⭐ Latest"
+                folder_path = f"{safe_category}/â­ Latest"
             elif row.method in TREE_METHODS:
                 path_str = row.original_folder_path or ""
                 parts = [p.strip() for p in path_str.split("/") if p.strip()]
@@ -618,7 +638,7 @@ def _export_segregation_to_box(engine_id: int):
             
         # 3. Create structure
         box_export_tasks[engine_id]["progress"] = 10
-        # folder_mapping maps "Category/⭐ Latest" -> "12345"
+        # folder_mapping maps "Category/â­ Latest" -> "12345"
         folder_mapping = box_service.create_folder_structure(root_folder.id, list(folder_paths))
         
         # 4. Copy files
@@ -707,3 +727,204 @@ def check_saved_to_box_status(
     except Exception as e:
         print(f"Error checking saved status: {e}")
         return {"saved": False}
+
+
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# GLOBAL SEARCH  â€” two-phase, serial-aware cross-engine search
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+@router.get("/global-search")
+def global_search(
+    q: str = Query(..., min_length=1, description="Comma or space separated keywords, numbers, dates"),
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Phase 1 â€“ Serial detection
+        Scan every token against every owned engine's serial number.
+        If one or more tokens match a serial (substring, case-insensitive),
+        restrict the row pool to ONLY that engine's files and remove the
+        matched token(s) from the keyword pool so they don't double-score.
+
+    Phase 2 â€“ File-level scoring on the (possibly narrowed) pool
+        Score remaining tokens against:
+          â€¢ box_file_name  (substring)  â†’ +4
+          â€¢ category        (substring)  â†’ +3
+          â€¢ raw_text        (pg_trgm)    â†’ up to +5
+          â€¢ metadata_json   (substring)  â†’ +2
+          â€¢ numbers in any of the above  â†’ +2 / +3
+          â€¢ dates in raw_text / metadata â†’ +4
+
+    Returns: ranked list (descending score), max 200 entries.
+    """
+    import json as _json
+
+    words, numbers, dates = _parse_tokens(q)
+
+    if not (words or numbers or dates):
+        return []
+
+    SIMILARITY_THRESHOLD = 0.15
+
+    # â”€â”€ Load all user's engines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    engines_list = (
+        db.query(models.Engine)
+        .filter(models.Engine.owner_id == current_user.id)
+        .all()
+    )
+    engine_map = {e.id: e.serial_number for e in engines_list}   # id â†’ serial
+    owned_ids  = list(engine_map.keys())
+
+    if not owned_ids:
+        return []
+
+    # â”€â”€ Phase 1: match tokens against engine serial numbers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # serial_matched_engine_ids: engines whose serial matched at least one token
+    # serial_matched_tokens:     those tokens (excluded from Phase 2 scoring)
+    serial_matched_engine_ids: set = set()
+    serial_matched_tokens:     set = set()
+
+    for token in list(words) + list(numbers):
+        tok_low = token.lower()
+        for eng_id, serial in engine_map.items():
+            ser_low = serial.lower()
+            # Match if the token is a substring of the serial OR the serial is
+            # a substring of the token (handles partial numbers like "577" in "V577270")
+            if tok_low in ser_low or ser_low in tok_low:
+                serial_matched_engine_ids.add(eng_id)
+                serial_matched_tokens.add(token)
+
+    # Determine scope: if serial(s) matched â†’ only those engines; else all
+    search_engine_ids = list(serial_matched_engine_ids) if serial_matched_engine_ids else owned_ids
+
+    # Remove serial tokens so Phase 2 doesn't re-score them as plain keywords
+    remaining_words   = [t for t in words   if t not in serial_matched_tokens]
+    remaining_numbers = [t for t in numbers if t not in serial_matched_tokens]
+
+    # â”€â”€ Phase 2: fetch rows and score â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    rows = (
+        db.query(models.SegregationResult)
+        .filter(models.SegregationResult.engine_id.in_(search_engine_ids))
+        .all()
+    )
+
+    scores: dict = {}
+
+    for row in rows:
+        score   = 0
+        reasons = []
+
+        engine_serial = engine_map.get(row.engine_id, "")
+        fname = (row.box_file_name or "").lower()
+        cat   = (row.category      or "").lower()
+        raw   = (row.raw_text      or "").lower()
+
+        meta_text = ""
+        if row.metadata_json:
+            try:
+                meta_text = _json.dumps(row.metadata_json).lower()
+            except Exception:
+                meta_text = str(row.metadata_json).lower()
+
+        # Baseline boost: every row in a serial-scoped search gets +2
+        if serial_matched_engine_ids:
+            score += 2
+            reasons.append(f"engine: {engine_serial}")
+
+        # â”€â”€ Word tokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        for token in remaining_words:
+            matched_any = False
+
+            if token in fname:
+                score += 4
+                reasons.append(f'filename: "{token}"')
+                matched_any = True
+
+            if token in cat:
+                score += 3
+                reasons.append(f'category: "{token}"')
+                matched_any = True
+
+            if len(token) >= 3:
+                sim = db.execute(
+                    sa_text("SELECT similarity(lower(:text), :tok)"),
+                    {"text": row.raw_text or "", "tok": token}
+                ).scalar() or 0.0
+                if sim >= SIMILARITY_THRESHOLD:
+                    score += max(1, round(sim * 5))
+                    reasons.append(f'text: "{token}" ({int(sim * 100)}%)')
+                    matched_any = True
+            elif token in raw:
+                score += 1
+                reasons.append(f'text: "{token}"')
+                matched_any = True
+
+            if token in meta_text:
+                score += 2
+                reasons.append(f'metadata: "{token}"')
+                matched_any = True
+
+        # â”€â”€ Number tokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        for num in remaining_numbers:
+            try:
+                fmt_num = f"{int(num):,}"
+            except ValueError:
+                fmt_num = num
+
+            if num in fname or fmt_num in fname:
+                score += 3
+                reasons.append(f"number in filename: {fmt_num}")
+            if num in cat or fmt_num in cat:
+                score += 3
+                reasons.append(f"number in category: {fmt_num}")
+            if num in raw or fmt_num in raw:
+                score += 3
+                reasons.append(f"number in text: {fmt_num}")
+            if num in meta_text or fmt_num in meta_text:
+                score += 3
+                reasons.append(f"number in metadata: {fmt_num}")
+
+        # â”€â”€ Date tokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        for date in dates:
+            norm = re.sub(r'[\/\-\.]', '', date)
+            raw_norm  = re.sub(r'[\/\-\.]', '', raw)
+            meta_norm = re.sub(r'[\/\-\.]', '', meta_text)
+            if norm in raw_norm:
+                score += 4
+                reasons.append(f"date in text: {date}")
+            if norm in meta_norm:
+                score += 4
+                reasons.append(f"date in metadata: {date}")
+
+        # Only include rows that earned a score above the baseline boost
+        min_score = 3 if serial_matched_engine_ids else 1
+        if score >= min_score:
+            seen  = set()
+            uniq  = []
+            for r in reasons:
+                if r not in seen:
+                    seen.add(r)
+                    uniq.append(r)
+
+            scores[row.id] = {
+                "score":                score,
+                "match_reasons":        uniq,
+                "id":                   row.id,
+                "engine_id":            row.engine_id,
+                "engine_serial_number": engine_serial,
+                "box_file_id":          row.box_file_id,
+                "box_file_name":        row.box_file_name,
+                "category":             row.category,
+                "method":               row.method,
+                "confidence":           round(row.confidence, 3),
+                "status":               row.status,
+                "reason":               row.reason,
+                "original_folder_path": row.original_folder_path,
+                "metadata_json":        row.metadata_json,
+                "latest":               bool(row.latest),
+                "embed_link":           None,
+                "download_url":         None,
+            }
+
+    ranked = sorted(scores.values(), key=lambda x: x["score"], reverse=True)
+    return ranked[:200]
+

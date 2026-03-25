@@ -496,7 +496,22 @@ class BoxService:
             import traceback
             traceback.print_exc()
             return None
-#client.folders.delete_folder_by_id(item.id, recursive=recursive)
+
+    def get_file_download_url(self, file_id):
+        """Get a direct download URL for a file (short-lived authenticated URL)."""
+        if not self.client:
+            return None
+        try:
+            file_info = self.client.files.get_file_by_id(
+                file_id,
+                fields=["download_url"]
+            )
+            return getattr(file_info, "download_url", None)
+        except Exception as e:
+            print(f"Error getting download URL for file {file_id}: {e}")
+            return None
+
+
     def delete_folder(self, folder_id):
         """Delete a folder and all its contents"""
         if not self.client:
