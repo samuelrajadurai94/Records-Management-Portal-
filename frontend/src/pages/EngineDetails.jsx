@@ -1690,8 +1690,15 @@ export default function EngineDetails() {
                                 const isOpen = !!expandedCategories[category];
 
                                 // Separate files: tree-methods vs flat-methods (exclude latest — shown in ⭐ Latest folder only)
-                                const treeFiles = files.filter(f => TREE_METHODS.has(f.method) && !f.latest);
-                                const flatFiles = files.filter(f => !TREE_METHODS.has(f.method) && !f.latest);
+                                // Specific logic: files in 'Manual Segregation' with '.db' extension are shown flat (no hierarchy)
+                                const treeFiles = files.filter(f => {
+                                    const isManualDb = f.category === 'Manual Segregation' && f.box_file_name.toLowerCase().endsWith('.db');
+                                    return TREE_METHODS.has(f.method) && !f.latest && !isManualDb;
+                                });
+                                const flatFiles = files.filter(f => {
+                                    const isManualDb = f.category === 'Manual Segregation' && f.box_file_name.toLowerCase().endsWith('.db');
+                                    return (!TREE_METHODS.has(f.method) || isManualDb) && !f.latest;
+                                });
                                 const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles) : null;
 
                                 return (
@@ -2104,9 +2111,15 @@ export default function EngineDetails() {
                     const catKey = `_mcat_${category}`;
                     const isCatOpen = !!metaExpandedCategories[catKey];
 
-                    // Same split as SegCategoryTree
-                    const treeFiles = files.filter(f => TREE_METHODS.has(f.method) && !f.latest);
-                    const flatFiles = files.filter(f => !TREE_METHODS.has(f.method) && !f.latest);
+                    // Same split as SegCategoryTree: flatten .db files in 'Manual Segregation'
+                    const treeFiles = files.filter(f => {
+                        const isManualDb = f.category === 'Manual Segregation' && f.box_file_name.toLowerCase().endsWith('.db');
+                        return TREE_METHODS.has(f.method) && !f.latest && !isManualDb;
+                    });
+                    const flatFiles = files.filter(f => {
+                        const isManualDb = f.category === 'Manual Segregation' && f.box_file_name.toLowerCase().endsWith('.db');
+                        return (!TREE_METHODS.has(f.method) || isManualDb) && !f.latest;
+                    });
                     const latestFiles = files.filter(f => f.latest);
                     const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles) : null;
 

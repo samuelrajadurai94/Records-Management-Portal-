@@ -56,9 +56,11 @@ elif Extraction_Pipeline =="Azure_ocr_Gemini_model":
     #from services import segregation_Azure_ocr_Gemini_model as seg_service
     print(Extraction_Pipeline)
 elif Extraction_Pipeline =="Aws_textract_rf_model":
-    from services.segregation_Aws_textract_rf_model import _remove_symbols, _check_readability, STOPLIST, check_latest, _sanitize_text,extract_text_aws_textract_tablestruc
+    from services.segregation_Aws_textract_rf_model import _remove_symbols, _check_readability, STOPLIST, check_latest, _sanitize_text,extract_text_textract_pdf_detect_doc
 
     print(Extraction_Pipeline)
+
+#extract_text_aws_textract_tablestruc
 
 
 
@@ -133,7 +135,7 @@ def Extract_text_ocmp(pdf_bytes: bytes, filename: str) -> dict:
                 #     t = ocr_doc[i].get_text("text")
                 #     ocr_text += t
                 # ocr_doc.close()
-                ocr_text, only_1st_page_text = extract_text_aws_textract_tablestruc(pdf_bytes)
+                ocr_text, only_1st_page_text = extract_text_textract_pdf_detect_doc(pdf_bytes)
 
                 clean = _remove_symbols(ocr_text)
                 readable, score, valid = _check_readability(clean)

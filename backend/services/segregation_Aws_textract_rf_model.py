@@ -43,91 +43,40 @@ textract_client = boto3.client(
     region_name=os.getenv("AWS_REGION"),
 )
 
-def extract_text_aws_textract_tablestruc(pdf_bytes: bytes):
+def extract_text_textract_pdf_detect_doc(pdf_bytes):
+    # Convert PDF → images (all pages)
     images = convert_from_bytes(pdf_bytes,first_page=1, last_page=50)
-     
 
-    final_output = []
+    all_pages_text = []
+    first_page_text = ""
 
-    for page_no, image in enumerate(images, start=1):
+    for idx, image in enumerate(images):
+        # Convert image → bytes
         img_bytes = io.BytesIO()
         image.save(img_bytes, format="PNG")
         img_bytes = img_bytes.getvalue()
 
-        response = textract_client.analyze_document(
-            Document={"Bytes": img_bytes},
-            FeatureTypes=["TABLES"]
+        # Call Textract
+        response = textract_client.detect_document_text(
+            Document={"Bytes": img_bytes}
         )
 
         blocks = response.get("Blocks", [])
-        block_map = {b["Id"]: b for b in blocks}
+        lines = [b["Text"] for b in blocks if b["BlockType"] == "LINE"]
 
-        page_text = []
-        page_tables = []
+        page_text = "\n".join(lines).strip()
 
-        # ✅ 1. Extract plain text
-        for b in blocks:
-            if b["BlockType"] == "LINE":
-                page_text.append(b["Text"])
+        # Store first page text
+        if idx == 0:
+            first_page_text = page_text
 
-        # ✅ 2. Extract tables
-        for block in blocks:
-            if block["BlockType"] == "TABLE":
-                table = {}
+        # Store all pages text
+        all_pages_text.append(page_text)
 
-                for rel in block.get("Relationships", []):
-                    if rel["Type"] == "CHILD":
-                        for cell_id in rel["Ids"]:
-                            cell = block_map[cell_id]
+    # Combine all pages
+    full_text = "\n\n".join(all_pages_text).strip()
 
-                            if cell["BlockType"] == "CELL":
-                                row = cell["RowIndex"]
-                                col = cell["ColumnIndex"]
-
-                                text = ""
-                                for rel2 in cell.get("Relationships", []):
-                                    if rel2["Type"] == "CHILD":
-                                        for word_id in rel2["Ids"]:
-                                            word = block_map[word_id]
-                                            if word["BlockType"] == "WORD":
-                                                text += word["Text"] + " "
-
-                                table.setdefault(row, {})[col] = text.strip()
-
-                # ✅ Convert table → formatted string
-                formatted_rows = []
-                max_cols = max(len(r) for r in table.values())
-
-                for r in sorted(table.keys()):
-                    row_data = table[r]
-                    row_text = " | ".join(
-                        row_data.get(c, "") for c in range(1, max_cols + 1)
-                    )
-                    formatted_rows.append(row_text)
-
-                # Optional: add separator line after header
-                if formatted_rows:
-                    separator = " | ".join(["---"] * max_cols)
-                    formatted_rows.insert(1, separator)
-
-                table_string = "\n".join(formatted_rows)
-                page_tables.append(table_string)
-
-        # ✅ 3. Combine page output
-        page_output = []
-        page_output.append(f"--- Page {page_no} ---")
-
-        if page_text:
-            page_output.append("\n".join(page_text))
-
-        if page_tables:
-            page_output.append("\n[Tables]\n")
-            page_output.append("\n\n".join(page_tables))
-
-        final_output.append("\n".join(page_output))
-
-    return "\n\n".join(final_output).strip(),final_output[0]
-
+    return full_text,first_page_text
 # ─────────────────────────────────────────────────────────────
 # CONFIG & RESOURCES
 # ─────────────────────────────────────────────────────────────
@@ -278,7 +227,7 @@ FOLDER_RULES = [
     ("33. Engine Data Plate",          ["data plate"],                                          False),
     ("14. Shop Visit Records",     ["sv", "shop", "visit"],                                 False),
     ("20. LLP BTB Trace",          ["btb", "back to birth", "llp btb", "llp traces"],       False),
-    ("12. Manufacturer Delivery Docs", ["manufacture", "export certificate", "export cofa"], False),
+    ("12. Manufacturer delivery docs", ["manufacture", "export certificate", "export cofa"], False),
     ("17. Commercial",             ["commercial"],                                           False),
     ("32. Historical Misc",            ["historical miscellaneous", "misc", "miscellaneous", "historical misc"], False),
     ("21. AD",                     ["AD"],                                                   "AD"),
@@ -347,7 +296,7 @@ def _folder_keyword_match(folder_path: str, file_ext: str) -> str | None:
                 return category
         elif rule_type is False:
             # Special: manufacturer docs — exclude 'non'
-            if category == "12. Manufacturer Delivery Docs":
+            if category == "12. Manufacturer delivery docs":
                 if any(kw in path_lower for kw in keywords) and "non" not in path_lower:
                     return category
             else:
@@ -408,7 +357,7 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
 
         if not all_text.strip() or len(final_valid) < 3:
             try:
-                ocr_text, only_1st_page_text = extract_text_aws_textract_tablestruc(pdf_bytes)
+                ocr_text, only_1st_page_text = extract_text_textract_pdf_detect_doc(pdf_bytes)
 
                 clean = _remove_symbols(ocr_text)
                 readable, score, valid = _check_readability(clean)
