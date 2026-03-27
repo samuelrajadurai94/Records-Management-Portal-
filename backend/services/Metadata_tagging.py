@@ -65,15 +65,6 @@ elif Extraction_Pipeline =="Aws_textract_rf_model":
 
 
 
-
-Total_schema_list_name_strings = [ADStatus_Statement_listData,ARC_Statement_listData,BSI_Report_listData,
-                     ETOPS_Statement_listData,NonExceedance_Statement_listData,FanBladeStatement_listData,
-                     Hours_Cycles_Statement_listData,HPTBladeStatement_listData,InstallRemovalStatement_listData,
-                     LDNDStatement_listData,LLPStatusStatement_listData,ManufacturerDelivery_listData,
-                     IncidentAccidentStatement_listData,Oilfuelused_Statement_listData,PMADER_Statement_listData,
-                     Preservation_Statement_listData,LRUQECStatement_listData,SBStatus_Statement_listData,
-                     ThrustRating_Statement_listData,Commercial_Statement_listData]
-
 # Configurable thread pool size (default 4 workers)
 META_WORKERS = int(os.getenv("META_WORKERS", "4"))
 
@@ -205,13 +196,11 @@ def _extract_single_file(row_id: int, box_file_id: str, box_file_name: str) -> d
         }
 
 excluded_categories = [
-    "8. Engine Condition-Trend Monitoring Report",
-    "23. In-House Modifications(If applicable)",
-    "10. Last Test Cell-MPA Report"
     "20. LLP BTB Trace",
     "14. Shop Visit Records",
-    "9. Oil Consumption Reports",
-    "7. Field repairs Statement"
+    "32. Historical-Misc",
+   "33. Engine Data Plate", 
+   "Manual Segregation", 
 ]
 
 # ─────────────────────────────────────────────────────────────
@@ -398,6 +387,15 @@ Pydantic_Schema_mapping_dict = {
     '4. Power-Thrust rating Statement':           ThrustRating_Statement_listData,
     '5. PMA-DER Statement':                       PMADER_Statement_listData,
     '6. Oil-Fluid used Statement':                Oilfuelused_Statement_listData,
+    '7. Field repairs Statement':                 FieldRepair_Statement_listData,
+    '8. Engine Condition-Trend Monitoring Report':  EngineConditionMonitoringReport_listData,
+    '23. In-House Modifications (If applicable)':   InHouseModification_Statement_listData,
+    '9. Oil Consumption Reports':                 OilConsumptionReport_listData,
+    '10. Last Test Cell-MPA Report':              LastTestCellMPAReport_listData,
+    '31. Carry Over-Forward List':                CarryForward_Statement_listData,
+    '29. Ferry flight(If applicable)':            FerryFlight_Statement_listData,
+    '28. Last C Check Maintenance Task Cards':    Last_CCheck_Statement_listData,
+
 }
 
 # ─────────────────────────────────────────────────────────────

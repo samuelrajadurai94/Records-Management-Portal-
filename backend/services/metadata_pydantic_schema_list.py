@@ -2112,10 +2112,757 @@ class Hours_Cycles_Statement_listData(BaseModel):
     header: Hours_Cycles_StatementHeader
     components: List[ComponentItem]
 
+class FieldRepairStatementHeader(BaseModel):
+    # statement_type intentionally omitted
+
+    statement_date: Optional[str] = Field(
+        None,
+        description=(
+            "Date the field repair statement was issued or signed."
+        )
+    )
+
+    operator_name: str = Field(
+        ...,
+        description="Operator, airline, CAMO, or organization issuing the statement."
+    )
+
+    operating_period: Optional[str] = Field(
+        None,
+        description=(
+            "Period during which the engine or aircraft was operated "
+            "(e.g., 'May 22, 2012 to January 26, 2013')."
+        )
+    )
+
+    statement_scope: Literal[
+        "ENGINE",
+        "AIRCRAFT",
+        "SHOP_VISIT"
+    ] = Field(
+        ...,
+        description=(
+            "Scope of declaration: ENGINE (most common), AIRCRAFT, or SHOP_VISIT."
+        )
+    )
+
+    field_repair_status: Literal[
+        "NO_FIELD_REPAIR",
+        "FIELD_REPAIR_PRESENT",
+        "NOT_STATED"
+    ] = Field(
+        ...,
+        description=(
+            "Indicates whether any field repair has been performed."
+        )
+    )
+
+    last_shop_visit_reference: Optional[str] = Field(
+        None,
+        description=(
+            "Reference to last shop visit if mentioned (date or statement like 'since last shop visit')."
+        )
+    )
+
+    signed_by: Optional[str] = Field(
+        None,
+        description="Name of authorized signatory."
+    )
+
+    signed_date: Optional[str] = Field(
+        None,
+        description="Date of signature, if different from statement date."
+    )
+class FieldRepairComponentItem(BaseModel):
+
+    component_type: Literal[
+        "ENGINE",
+        "APU",
+        "AIRFRAME",
+        "COMPONENT"
+    ] = Field(
+        ...,
+        description="Component category (typically ENGINE for these documents)."
+    )
+
+    position: Optional[str] = Field(
+        None,
+        description="Engine position (LH, RH, #1, #2) if mentioned."
+    )
+
+    model_type: Optional[str] = Field(
+        None,
+        description="Engine or component model (e.g., CFM56-7B26, CFM56-5B4/3)."
+    )
+
+    serial_number: Optional[str] = Field(
+        None,
+        description="Serial number (ESN, S/N)."
+    )
+
+    time_since_new_tsn: Optional[str] = Field(
+        None,
+        description="Time Since New (TSN) at end of operation or reporting date."
+    )
+
+    cycles_since_new_csn: Optional[str] = Field(
+        None,
+        description="Cycles Since New (CSN) at end of operation."
+    )
+
+    last_shop_visit_date: Optional[str] = Field(
+        None,
+        description="Last shop visit date if explicitly provided."
+    )
+class FieldRepair_Statement_listData(BaseModel):
+    header: FieldRepairStatementHeader
+    components: List[FieldRepairComponentItem]
+
+class InHouseModificationStatementHeader(BaseModel):
+    # statement_type intentionally omitted
+
+    statement_date: Optional[str] = Field(
+        None,
+        description="Date the in-house modification statement was issued or signed."
+    )
+
+    operator_name: str = Field(
+        ...,
+        description="Operator, airline, CAMO, or organization issuing the statement."
+    )
+
+    operating_period: Optional[str] = Field(
+        None,
+        description=(
+            "Period during which the engine or aircraft was operated "
+            "(e.g., '17-Feb-2021 to 23-Sep-2021')."
+        )
+    )
+
+    statement_scope: Literal[
+        "ENGINE",
+        "AIRCRAFT",
+        "MULTI_ENGINE"
+    ] = Field(
+        ...,
+        description="Scope of declaration (single engine, aircraft-level, or multiple engines)."
+    )
+
+    inhouse_modification_status: Literal[
+        "NO_INHOUSE_MOD",
+        "INHOUSE_MOD_PRESENT",
+        "NOT_STATED"
+    ] = Field(
+        ...,
+        description="Indicates whether any in-house/local modification was performed."
+    )
+
+    modification_scope_details: Optional[str] = Field(
+        None,
+        description=(
+            "Additional details about scope such as 'including internal configuration', "
+            "'including STC or non-manufacturer modifications'."
+        )
+    )
+
+    reference_number: Optional[str] = Field(
+        None,
+        description="Reference number or document ID if available."
+    )
+
+    signed_by: Optional[str] = Field(
+        None,
+        description="Name of authorized signatory."
+    )
+
+    signed_date: Optional[str] = Field(
+        None,
+        description="Date of signature if separate from statement date."
+    )
+
+class InHouseModificationComponentItem(BaseModel):
+
+    component_type: Literal[
+        "ENGINE",
+        "APU",
+        "AIRFRAME",
+        "COMPONENT"
+    ] = Field(
+        ...,
+        description="Component category (typically ENGINE in these documents)."
+    )
+
+    position: Optional[str] = Field(
+        None,
+        description="Engine position if mentioned (LH, RH, #1, #2)."
+    )
+
+    model_type: Optional[str] = Field(
+        None,
+        description="Engine or component model (e.g., CFM56-7B26)."
+    )
+
+    serial_number: Optional[str] = Field(
+        None,
+        description="Engine Serial Number (ESN / S/N)."
+    )
+
+    time_since_new_tsn: Optional[str] = Field(
+        None,
+        description="Time Since New (TSN)."
+    )
+
+    cycles_since_new_csn: Optional[str] = Field(
+        None,
+        description="Cycles Since New (CSN)."
+    )
+
+    modification_applied: Optional[bool] = Field(
+        None,
+        description="True if modification present, False if explicitly declared none."
+    )
+
+    modification_reference: Optional[str] = Field(
+        None,
+        description="Reference to modification (STC, internal mod, engineering order) if present."
+    )
+
+class InHouseModification_Statement_listData(BaseModel):
+    header: InHouseModificationStatementHeader
+    components: List[InHouseModificationComponentItem]
+
+class EngineConditionHeader(BaseModel):
+
+    report_date: Optional[str] = Field(
+        None,
+        description="Date of report."
+    )
+
+    operator_name: Optional[str] = Field(
+        None,
+        description="Airline or operator."
+    )
+
+    aircraft_registration: Optional[str] = Field(
+        None,
+        description="Aircraft registration."
+    )
+
+    engine_model: Optional[str] = Field(
+        None,
+        description="Engine model."
+    )
+
+    engine_serial_number: Optional[str] = Field(
+        None,
+        description="Engine Serial Number (ESN)."
+    )
+
+    monitoring_period: Optional[str] = Field(
+        None,
+        description="Monitoring duration."
+    )
+
+
+
+class EngineTrendItem(BaseModel):
+
+    parameter_name: Literal[
+        "EGT",
+        "FUEL_FLOW",
+        "N1",
+        "N2",
+        "VIBRATION",
+        "OTHER"
+    ] = Field(
+        ...,
+        description="Key monitored parameter."
+    )
+
+    value: Optional[float] = Field(
+        None,
+        description="Observed value (latest or representative)."
+    )
+
+    trend_direction: Optional[Literal[
+        "INCREASING",
+        "DECREASING",
+        "STABLE",
+        "UNKNOWN"
+    ]] = Field(
+        None,
+        description="Trend behavior."
+    )
+
+    anomaly_detected: Optional[bool] = Field(
+        None,
+        description="Indicates abnormal trend."
+    )
+
+
+class EngineConditionMonitoringReport_listData(BaseModel):
+
+    header: EngineConditionHeader
+
+    components: List[EngineTrendItem]
+
+
+
+class TestCellHeader(BaseModel):
+
+    test_date: Optional[str] = Field(
+        None,
+        description="Date of test cell run."
+    )
+
+    organization: Optional[str] = Field(
+        None,
+        description="MRO or test facility."
+    )
+
+    engine_model: Optional[str] = Field(
+        None,
+        description="Engine model (e.g., CFM56-7B)."
+    )
+
+    engine_serial_number: Optional[str] = Field(
+        None,
+        description="Engine Serial Number (ESN)."
+    )
+
+    test_reason: Optional[str] = Field(
+        None,
+        description="Reason for test (overhaul, repair, acceptance)."
+    )
+
+    test_result: Literal[
+        "PASS",
+        "FAIL",
+        "CONDITIONAL_PASS",
+        "UNKNOWN"
+    ] = Field(
+        ...,
+        description="Final test result."
+    )
+class TestCellComponentItem(BaseModel):
+
+    test_condition: Literal[
+        "IDLE",
+        "TAKEOFF",
+        "MAX_POWER",
+        "CRUISE",
+        "UNKNOWN"
+    ] = Field(
+        ...,
+        description="Test condition or power setting."
+    )
+
+    n1: Optional[float] = Field(
+        None,
+        description="Fan speed (N1)."
+    )
+
+    n2: Optional[float] = Field(
+        None,
+        description="Core speed (N2)."
+    )
+
+    egt: Optional[float] = Field(
+        None,
+        description="Exhaust Gas Temperature."
+    )
+
+    fuel_flow: Optional[float] = Field(
+        None,
+        description="Fuel flow."
+    )
+
+    within_limits: Optional[bool] = Field(
+        None,
+        description="Indicates if parameters are within limits."
+    )
+
+class LastTestCellMPAReport_listData(BaseModel):
+
+    header: TestCellHeader
+
+    components: List[TestCellComponentItem]
+
+
+class OilConsumptionHeader(BaseModel):
+
+    report_date: Optional[str] = Field(
+        None,
+        description="Date the oil consumption report was generated."
+    )
+
+    operator_name: Optional[str] = Field(
+        None,
+        description="Airline or organization issuing the report."
+    )
+
+    aircraft_registration: Optional[str] = Field(
+        None,
+        description="Aircraft registration (e.g., VT-XXX, B-XXXX)."
+    )
+
+    engine_model: Optional[str] = Field(
+        None,
+        description="Engine model (e.g., CFM56-7B)."
+    )
+
+    engine_serial_number: Optional[str] = Field(
+        None,
+        description="Engine Serial Number (ESN)."
+    )
+
+    monitoring_period: Optional[str] = Field(
+        None,
+        description="Date range of oil consumption monitoring."
+    )
+
+class OilConsumptionComponentItem(BaseModel):
+
+    component_type: Literal["ENGINE"] = Field(
+        ...,
+        description="Component type (always ENGINE for this document)."
+    )
+
+    position: Optional[str] = Field(
+        None,
+        description="Engine position (#1, #2, LH, RH)."
+    )
+
+    oil_consumption_rate: Optional[str] = Field(
+        None,
+        description="Oil consumption rate (e.g., QT/HR)."
+    )
+
+    oil_uplift: Optional[str] = Field(
+        None,
+        description="Total oil added (uplift)."
+    )
+
+    flight_hours: Optional[str] = Field(
+        None,
+        description="Operating hours used for calculation."
+    )
+
+    threshold_limit: Optional[str] = Field(
+        None,
+        description="Maximum allowed oil consumption limit."
+    )
+
+    within_limit: Optional[bool] = Field(
+        None,
+        description="Indicates if consumption is within acceptable limits."
+    )
+
+class OilConsumptionReport_listData(BaseModel):
+    header: OilConsumptionHeader
+    components: List[OilConsumptionComponentItem]
+
+
+class CarryForwardHeader(BaseModel):
+
+    statement_date: Optional[str] = Field(
+        None,
+        description="Date of carry forward / open item document."
+    )
+
+    operator_name: Optional[str] = Field(
+        None,
+        description="Operator, MRO, or organization issuing the document."
+    )
+
+    aircraft_registration: Optional[str] = Field(
+        None,
+        description="Aircraft registration if mentioned."
+    )
+
+    engine_model: Optional[str] = Field(
+        None,
+        description="Engine model (e.g., CFM56-5B)."
+    )
+
+    engine_serial_number: Optional[str] = Field(
+        None,
+        description="Engine Serial Number (ESN)."
+    )
+
+    reference_number: Optional[str] = Field(
+        None,
+        description="Work order / shop order / document reference."
+    )
+
+class CarryForwardItem(BaseModel):
+
+    item_number: Optional[str] = Field(
+        None,
+        description="Item number in the list."
+    )
+
+    description: Optional[str] = Field(
+        None,
+        description="Description of work to be carried forward / missing item."
+    )
+
+    part_number: Optional[str] = Field(
+        None,
+        description="Part number if applicable."
+    )
+
+    quantity: Optional[str] = Field(
+        None,
+        description="Quantity of part or task."
+    )
+
+    ata_reference: Optional[str] = Field(
+        None,
+        description="ATA reference if mentioned."
+    )
+
+    action_required: Optional[str] = Field(
+        None,
+        description="Action to be performed (inspection, installation, test, etc.)."
+    )
+
+    status: Optional[Literal[
+        "OPEN",
+        "CLOSED",
+        "NOT_CLEARED",
+        "UNKNOWN"
+    ]] = Field(
+        None,
+        description="Status of the carry forward item."
+    )
+
+    remarks: Optional[str] = Field(
+        None,
+        description="Additional notes or comments."
+    )
+
+class CarryForward_Statement_listData(BaseModel):
+    header: CarryForwardHeader
+    components: List[CarryForwardItem]
+
+
+class FerryFlightStatementHeader(BaseModel):
+
+    statement_date: Optional[str] = Field(
+        None,
+        description="Date of ferry flight statement or report."
+    )
+
+    operator_name: Optional[str] = Field(
+        None,
+        description="Operator or organization issuing the document."
+    )
+
+    aircraft_model: Optional[str] = Field(
+        None,
+        description="Aircraft model (e.g., B737-700)."
+    )
+
+    aircraft_registration: Optional[str] = Field(
+        None,
+        description="Aircraft registration."
+    )
+
+    msn: Optional[str] = Field(
+        None,
+        description="Manufacturer Serial Number (MSN)."
+    )
+
+    engine_model: Optional[str] = Field(
+        None,
+        description="Engine model (e.g., CFM56-7B)."
+    )
+
+    engine_serial_number: Optional[str] = Field(
+        None,
+        description="Engine Serial Number (ESN)."
+    )
+
+    ferry_flight_status: Literal[
+        "COMPLETED",
+        "APPROVED",
+        "CONDITIONAL",
+        "NOT_STATED"
+    ] = Field(
+        ...,
+        description="Ferry flight execution/approval status."
+    )
+
+    signed_by: Optional[str] = Field(
+        None,
+        description="Authorized signatory."
+    )
+
+class FerryFlightComponentItem(BaseModel):
+
+    component_type: Literal["ENGINE", "AIRCRAFT"] = Field(
+        ...,
+        description="Component reference."
+    )
+
+    position: Optional[str] = Field(
+        None,
+        description="Engine position (#1, #2)."
+    )
+
+    departure_location: Optional[str] = Field(
+        None,
+        description="Departure airport."
+    )
+
+    destination_location: Optional[str] = Field(
+        None,
+        description="Arrival airport."
+    )
+
+    flight_hours: Optional[str] = Field(
+        None,
+        description="Total flight hours during ferry."
+    )
+
+    flight_cycles: Optional[str] = Field(
+        None,
+        description="Total flight cycles."
+    )
+
+    pre_tsn: Optional[str] = Field(
+        None,
+        description="Time Since New before ferry."
+    )
+
+    post_tsn: Optional[str] = Field(
+        None,
+        description="Time Since New after ferry."
+    )
+
+    pre_csn: Optional[str] = Field(
+        None,
+        description="Cycles Since New before ferry."
+    )
+
+    post_csn: Optional[str] = Field(
+        None,
+        description="Cycles Since New after ferry."
+    )
+
+    condition_statement: Optional[str] = Field(
+        None,
+        description="Statement about condition (no incident, no damage, etc.)."
+    )
+
+    defects: Optional[str] = Field(
+        None,
+        description="Any discrepancy or defect (often NIL)."
+    )
+ 
+class FerryFlight_Statement_listData(BaseModel):
+    header: FerryFlightStatementHeader
+    components: List[FerryFlightComponentItem]
+
+class CCheckStatementHeader(BaseModel):
+
+    statement_date: Optional[str] = Field(
+        None,
+        description="Date of C-check completion."
+    )
+
+    operator_name: Optional[str] = Field(
+        None,
+        description="Operator or MRO performing the C-check."
+    )
+
+    aircraft_model: Optional[str] = Field(
+        None,
+        description="Aircraft model (e.g., A320, B737)."
+    )
+
+    engine_model: Optional[str] = Field(
+        None,
+        description="Engine model (e.g., CFM56-5B)."
+    )
+
+    engine_serial_number: Optional[str] = Field(
+        None,
+        description="Engine Serial Number (ESN)."
+    )
+
+    time_since_new_tsn: Optional[str] = Field(
+        None,
+        description="Time Since New at C-check."
+    )
+
+    cycles_since_new_csn: Optional[str] = Field(
+        None,
+        description="Cycles Since New at C-check."
+    )
+
+    c_check_status: Literal[
+        "COMPLETED",
+        "PARTIAL",
+        "NOT_COMPLETED",
+        "NOT_STATED"
+    ] = Field(
+        ...,
+        description="Status of C-check accomplishment."
+    )
+
+    signed_by: Optional[str] = Field(
+        None,
+        description="Authorized signatory."
+    )
+
+
+class CCheckComponentItem(BaseModel):
+
+    component_type: Literal["ENGINE"] = Field(
+        ...,
+        description="Component type (ENGINE)."
+    )
+
+    inspection_performed: Optional[bool] = Field(
+        None,
+        description="Indicates if major inspections were performed."
+    )
+
+    defects_found: Optional[str] = Field(
+        None,
+        description="Summary of defects found (if any)."
+    )
+
+    corrective_actions: Optional[str] = Field(
+        None,
+        description="Summary of corrective actions performed."
+    )
+
+    compliance_status: Optional[Literal[
+        "COMPLIED",
+        "PARTIAL",
+        "NOT_COMPLIED",
+        "UNKNOWN"
+    ]] = Field(
+        None,
+        description="Overall compliance status of maintenance tasks."
+    )
+
+class Last_CCheck_Statement_listData(BaseModel):
+    header: CCheckStatementHeader
+    components: List[CCheckComponentItem]
+
+
+
 Total_schema_list = [ADStatus_Statement_listData,ARC_Statement_listData,BSI_Report_listData,
                      ETOPS_Statement_listData,NonExceedance_Statement_listData,FanBladeStatement_listData,
                      Hours_Cycles_Statement_listData,HPTBladeStatement_listData,InstallRemovalStatement_listData,
                      LDNDStatement_listData,LLPStatusStatement_listData,ManufacturerDelivery_listData,
                      IncidentAccidentStatement_listData,Oilfuelused_Statement_listData,PMADER_Statement_listData,
                      Preservation_Statement_listData,LRUQECStatement_listData,SBStatus_Statement_listData,
-                     ThrustRating_Statement_listData,Commercial_Statement_listData]
+                     ThrustRating_Statement_listData,Commercial_Statement_listData,FieldRepair_Statement_listData,
+                     EngineConditionMonitoringReport_listData,InHouseModification_Statement_listData,OilConsumptionReport_listData,
+                     LastTestCellMPAReport_listData,CarryForward_Statement_listData,FerryFlight_Statement_listData,
+                     Last_CCheck_Statement_listData]
