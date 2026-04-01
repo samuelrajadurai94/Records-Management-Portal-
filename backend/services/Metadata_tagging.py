@@ -68,11 +68,6 @@ elif Extraction_Pipeline =="Aws_textract_rf_model":
 # Configurable thread pool size (default 4 workers)
 META_WORKERS = int(os.getenv("META_WORKERS", "4"))
 
-# In-memory job status: engine_id -> { status, total, completed }
-_extraction_status: dict[int, dict] = {}
-_extraction_lock = threading.Lock()
-
-
 def get_extraction_status(engine_id: int) -> dict:
     return _extraction_status.get(engine_id, {"status": "idle", "total": 0, "completed": 0})
 

@@ -841,6 +841,12 @@ export default function EngineDetails() {
     // Metadata Extraction state
     const [fileStats, setFileStats] = useState(null);
 
+    // Full Engine Text Extraction state
+    const [fullExtStatus, setFullExtStatus] = useState('idle'); // idle|running|done|error
+    const [fullExtProgress, setFullExtProgress] = useState({ total: 0, completed: 0, errors: [] });
+    const [fullExtPollInterval, setFullExtPollInterval] = useState(null);
+    const [showFullExtErrorModal, setShowFullExtErrorModal] = useState(false);
+
     // Single full-pipeline state (replaces separate extraction + tagging states)
     const [pipelineStatus, setPipelineStatus] = useState('idle'); // idle|running|done|error
     const [pipelineProgress, setPipelineProgress] = useState({ total: 0, completed: 0, extracted: 0, tagged: 0, skipped: 0, errors: 0 });
@@ -858,6 +864,13 @@ export default function EngineDetails() {
     const [schemaCategories, setSchemaCategories] = useState(new Set());
     const [folderPipelineStatus, setFolderPipelineStatus] = useState({}); // { [category]: 'idle'|'running'|'done'|'error' }
     const [folderPipelineProgress, setFolderPipelineProgress] = useState({}); // { [category]: number 0-100 }
+
+    // Deliverables state
+    const [segregatedFolderId, setSegregatedFolderId] = useState(null);
+    const [deliverablesFolderStructure, setDeliverablesFolderStructure] = useState(null);
+    const [expandedDeliverablesFolders, setExpandedDeliverablesFolders] = useState({});
+    const [deliverablesSelectedFile, setDeliverablesSelectedFile] = useState(null);
+    const [deliverablesActiveSubTab, setDeliverablesActiveSubTab] = useState(null);
 
     const tabs = ['RAW FOLDER', 'FOLDER SEGREGATION', 'META DATA TAGGING', 'LLP STATUS', 'OPEN ITEM LIST', 'LLP TRACE', 'DELIVERABLES'];
 
@@ -1004,6 +1017,9 @@ export default function EngineDetails() {
         try {
             const res = await api.get(`/segregation/saved-to-box-status/${id}`);
             setIsBoxSaved(Boolean(res.data.saved));
+            if (res.data.folder_id) {
+                setSegregatedFolderId(res.data.folder_id);
+            }
         } catch (_) { }
     }, [id]);
 
@@ -1012,6 +1028,26 @@ export default function EngineDetails() {
         fetchExistingResults();
         checkBoxSavedStatus();
     }, [id, fetchEngineData, fetchExistingResults, checkBoxSavedStatus]);
+
+    // Load root folder data for Deliverables Segregated Folder
+    useEffect(() => {
+        if (activeTab === 'DELIVERABLES' && deliverablesActiveSubTab === 'Segregated Folder' && segregatedFolderId && !deliverablesFolderStructure) {
+            const fetchRoot = async () => {
+                try {
+                    const res = await api.get(`/engines/${id}/box-folder/${segregatedFolderId}`);
+                    setDeliverablesFolderStructure({
+                        id: segregatedFolderId,
+                        name: 'Segregated Folder',
+                        type: 'folder',
+                        children: res.data,
+                        isLoaded: true
+                    });
+                    setExpandedDeliverablesFolders({ [segregatedFolderId]: true });
+                } catch (e) { console.error("Error loading segregated folder tree", e); }
+            };
+            fetchRoot();
+        }
+    }, [activeTab, deliverablesActiveSubTab, segregatedFolderId, deliverablesFolderStructure, id]);
 
     // Cleanup polling on unmount
     useEffect(() => {
@@ -1047,6 +1083,46 @@ export default function EngineDetails() {
             setSegPollInterval(interval);
         } catch (err) {
             setSegStatus('error');
+            console.error(err);
+        }
+    };
+
+    // ── Full Engine Text Extraction trigger ───────────────────────────────
+    const handleFullTextExtraction = async () => {
+        if (fullExtStatus === 'running') return;
+        setFullExtStatus('running');
+        setFullExtProgress({ total: 0, completed: 0, errors: [] });
+        try {
+            await api.post(`/metadata/extract-text/full-engine/${id}`);
+            const interval = setInterval(async () => {
+                try {
+                    const statusRes = await api.get(`/metadata/extract-text/full-engine/status/${id}`);
+                    const data = statusRes.data;
+                    setFullExtProgress({
+                        total: data.total || 0,
+                        completed: data.completed || 0,
+                        errors: data.errors || []
+                    });
+
+                    if (data.status === 'done' || data.status === 'error') {
+                        clearInterval(interval);
+                        setFullExtPollInterval(null);
+                        setFullExtStatus(data.status);
+                        
+                        // Auto-show errors if there were any, but wait for user to close
+                        if (data.errors && data.errors.length > 0) {
+                            setShowFullExtErrorModal(true);
+                        } else if (data.status === 'done') {
+                            setTimeout(() => setFullExtStatus('idle'), 4000);
+                        }
+                    }
+                } catch (_) { }
+            }, 3000);
+            setFullExtPollInterval(interval);
+        } catch (err) {
+            setFullExtStatus('error');
+            setFullExtProgress(prev => ({ ...prev, errors: [{ file_name: 'Request', reason: err?.response?.data?.detail || err.message }] }));
+            setShowFullExtErrorModal(true);
             console.error(err);
         }
     };
@@ -1200,6 +1276,47 @@ export default function EngineDetails() {
         }
     };
 
+    const handleDeliverablesFileClick = async (file) => {
+        try {
+            const res = await api.get(`/engines/${id}/box-file/${file.id || file.box_file_id}`);
+            setDeliverablesSelectedFile({ ...file, ...res.data });
+        } catch (err) {
+            console.error(err);
+            alert('Error loading file');
+        }
+    };
+
+    const toggleDeliverablesFolder = async (folderId) => {
+        const isExpanded = !!expandedDeliverablesFolders[folderId];
+        if (!isExpanded) {
+            const findAndCheckFolder = (items) => {
+                if (items.id === folderId) return items;
+                if (items.children) {
+                    for (const child of items.children) {
+                        const found = findAndCheckFolder(child);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            };
+            const targetFolder = findAndCheckFolder(deliverablesFolderStructure);
+            if (targetFolder && targetFolder.type === 'folder' && targetFolder.isLoaded === false) {
+                try {
+                    const res = await api.get(`/engines/${id}/box-folder/${folderId}`);
+                    const updateTree = (item) => {
+                        if (item.id === folderId) return { ...item, children: res.data, isLoaded: true };
+                        if (item.children) return { ...item, children: item.children.map(updateTree) };
+                        return item;
+                    };
+                    setDeliverablesFolderStructure(updateTree(deliverablesFolderStructure));
+                } catch (err) {
+                    console.error('Error loading Deliverables folder contents:', err);
+                }
+            }
+        }
+        setExpandedDeliverablesFolders(prev => ({ ...prev, [folderId]: !prev[folderId] }));
+    };
+
     // ── RAW FOLDER tree helpers ────────────────────────────────────────────
     const toggleFolder = async (folderId) => {
         const isExpanded = !!expandedFolders[folderId];
@@ -1316,6 +1433,76 @@ export default function EngineDetails() {
                 </div>
                 {isExpanded && item.children && item.children.length > 0 &&
                     item.children.map(child => <FolderTreeItem key={child.id} item={child} level={level + 1} />)}
+                {isExpanded && item.isLoaded && (!item.children || item.children.length === 0) && (
+                    <div style={{ paddingLeft: `${32 + level * 20}px`, fontSize: '0.8rem', color: '#999', paddingBottom: '4px' }}>
+                        (Empty)
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    // ── DELIVERABLES tree components ────────────────────────────────────────
+    const DeliverablesFileTreeItem = ({ file, level = 0 }) => {
+        const isSelected = deliverablesSelectedFile?.id === file.id;
+        return (
+            <div
+                onClick={() => handleDeliverablesFileClick(file)}
+                style={{
+                    display: 'flex', alignItems: 'center',
+                    padding: '8px 12px', paddingLeft: `${12 + level * 20}px`,
+                    cursor: 'pointer',
+                    background: isSelected ? 'var(--primary)' : 'transparent',
+                    color: isSelected ? 'white' : 'var(--primary)',
+                    borderRadius: '4px', marginBottom: '2px',
+                    fontWeight: isSelected ? 600 : 400,
+                    fontSize: '0.85rem', transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = 'white'; }}
+                onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+            >
+                <FileText size={14} style={{ marginRight: '8px', flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {file.name}
+                </span>
+            </div>
+        );
+    };
+
+    const DeliverablesFolderTreeItem = ({ item, level = 0 }) => {
+        if (item.type === 'file') return <DeliverablesFileTreeItem file={item} level={level} />;
+        const isExpanded = expandedDeliverablesFolders[item.id];
+        return (
+            <div>
+                <div
+                    onClick={() => toggleDeliverablesFolder(item.id)}
+                    style={{
+                        display: 'flex', alignItems: 'center',
+                        padding: '8px 12px', paddingLeft: `${12 + level * 20}px`,
+                        cursor: 'pointer', background: 'transparent',
+                        color: 'var(--primary)', borderRadius: '4px',
+                        marginBottom: '2px', fontWeight: 500,
+                        fontSize: '0.9rem', transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'white'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                    <span style={{ marginRight: '6px', display: 'flex', alignItems: 'center' }}>
+                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </span>
+                    {isExpanded
+                        ? <FolderOpen size={16} style={{ marginRight: '8px' }} />
+                        : <Folder size={16} style={{ marginRight: '8px' }} />}
+                    <span>{item.name}</span>
+                    {item.file_count > 0 && (
+                        <span style={{
+                            marginLeft: 'auto', fontSize: '0.75rem', opacity: 0.7,
+                            background: '#e0e0e0', padding: '2px 6px', borderRadius: '10px'
+                        }}>{item.file_count}</span>
+                    )}
+                </div>
+                {isExpanded && item.children && item.children.length > 0 &&
+                    item.children.map(child => <DeliverablesFolderTreeItem key={child.id} item={child} level={level + 1} />)}
                 {isExpanded && item.isLoaded && (!item.children || item.children.length === 0) && (
                     <div style={{ paddingLeft: `${32 + level * 20}px`, fontSize: '0.8rem', color: '#999', paddingBottom: '4px' }}>
                         (Empty)
@@ -1681,6 +1868,7 @@ export default function EngineDetails() {
                             }}>
                                 <span>📂 <b>{summary.total_files}</b> files</span>
                                 <span>📄 <b>{summary.pdf_files}</b> PDFs</span>
+                                <span>📄 <b>{summary.pdfs_with_text}</b> PDFs with text</span>
                                 <span>🖼 <b>{summary.media_files}</b> media</span>
                                 <span>📎 <b>{summary.other_files}</b> other</span>
                                 <span>🗂 <b>{summary.categories_found}</b> categories</span>
@@ -2801,6 +2989,30 @@ export default function EngineDetails() {
                             {segStatus === 'running' ? 'Processing...' : '🔄 Re-run Segregation'}
                         </button>
 
+                        <button
+                            onClick={handleFullTextExtraction}
+                            disabled={fullExtStatus === 'running'}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '8px',
+                                padding: '7px 16px', borderRadius: '8px', border: 'none',
+                                background: fullExtStatus === 'running' ? '#94a3b8' : '#6366f1',
+                                color: 'white', fontWeight: 700, fontSize: '0.8rem',
+                                cursor: fullExtStatus === 'running' ? 'not-allowed' : 'pointer',
+                                boxShadow: '0 2px 6px rgba(99,102,241,0.25)',
+                            }}
+                        >
+                            {fullExtStatus === 'running' ? <Loader size={13} className="spinner" /> : <FileText size={13} />}
+                            {fullExtStatus === 'running' 
+                                ? `Extracting Base Text... ${fullExtProgress.completed}/${fullExtProgress.total}`
+                                : 'Full Engine Text Extraction'}
+                        </button>
+                        
+                        {(fullExtStatus === 'done' || fullExtStatus === 'error') && (
+                            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: fullExtStatus === 'error' ? '#ef4444' : '#10b981' }}>
+                                {fullExtStatus === 'done' ? '✅ Extraction Complete' : '⚠️ Completed with errors'}
+                            </span>
+                        )}
+
                         {segStatus === 'done' && (
                             <div style={{ display: 'flex', gap: '10px', marginLeft: 'auto' }}>
                                 <button
@@ -3033,8 +3245,146 @@ export default function EngineDetails() {
                 </div>
             )}
 
+            {/* ── DELIVERABLES TAB ── */}
+            {activeTab === 'DELIVERABLES' && (
+                <div style={{ display: 'flex', flex: 1, overflow: 'hidden', flexDirection: 'column' }}>
+                    {/* Sub Tab Bar */}
+                    <div style={{
+                        background: 'white', borderBottom: '1px solid #edf2f7',
+                        display: 'flex', padding: '0.5rem 1rem', gap: '0.5rem'
+                    }}>
+                        <button
+                            style={{
+                                padding: '6px 16px', borderRadius: '20px', border: 'none', cursor: 'pointer',
+                                background: deliverablesActiveSubTab === 'Segregated Folder' ? 'var(--primary)' : '#f1f5f9',
+                                color: deliverablesActiveSubTab === 'Segregated Folder' ? 'white' : '#64748b',
+                                fontWeight: 600, fontSize: '0.8rem', transition: 'all 0.2s'
+                            }}
+                            onClick={() => setDeliverablesActiveSubTab('Segregated Folder')}
+                        >
+                            Segregated Folder
+                        </button>
+                    </div>
+
+                    {/* Sub Tab Content */}
+                    <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+                        {deliverablesActiveSubTab === 'Segregated Folder' && (
+                            !isBoxSaved ? (
+                                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--background)' }}>
+                                    <div style={{ textAlign: 'center', color: '#64748b' }}>
+                                        <Folder size={48} style={{ opacity: 0.3, marginBottom: '1rem', display: 'block', margin: '0 auto 1rem' }} />
+                                        <h3 style={{ margin: 0 }}>Segregated Folder doesn't saved to box</h3>
+                                        <p style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}>Go to FOLDER SEGREGATION tab and click "Save to Box" first.</p>
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
+                                    {/* Sidebar */}
+                                    <div style={{
+                                        width: `${sidebarWidth}px`, background: '#E3F2FD',
+                                        borderRight: '1px solid #e0e0e0', overflowY: 'auto',
+                                        padding: '1rem 0.5rem', position: 'relative'
+                                    }}>
+                                        {deliverablesFolderStructure ? (
+                                            <DeliverablesFolderTreeItem item={deliverablesFolderStructure} />
+                                        ) : (
+                                            <div style={{ padding: '2rem', textAlign: 'center', color: '#666' }}>
+                                                <Loader size={20} className="spinner" style={{ marginBottom: '10px' }} />
+                                                <div>Loading folder tree...</div>
+                                            </div>
+                                        )}
+                                        {/* Resize handle */}
+                                        <div
+                                            onMouseDown={handleMouseDown}
+                                            style={{
+                                                position: 'absolute', right: 0, top: 0, bottom: 0, width: '5px',
+                                                cursor: 'col-resize', background: isResizing ? 'var(--primary)' : 'transparent',
+                                            }}
+                                            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(2,62,138,0.3)'}
+                                            onMouseLeave={(e) => !isResizing && (e.currentTarget.style.background = 'transparent')}
+                                        />
+                                    </div>
+
+                                    {/* Content/Viewer */}
+                                    <div style={{
+                                        flex: 1, background: 'var(--background)',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        overflow: 'hidden', position: 'relative'
+                                    }}>
+                                        {deliverablesSelectedFile && (
+                                            <button
+                                                onClick={() => setDeliverablesSelectedFile(null)}
+                                                style={{
+                                                    position: 'absolute', top: '10px', right: '10px',
+                                                    background: 'rgba(0,0,0,0.5)', color: 'white',
+                                                    border: 'none', borderRadius: '50%',
+                                                    width: '32px', height: '32px',
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    cursor: 'pointer', zIndex: 10, transition: 'background 0.2s'
+                                                }}
+                                                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.7)'}
+                                                onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.5)'}
+                                                title="Close preview"
+                                            ><X size={20} /></button>
+                                        )}
+                                        {deliverablesSelectedFile && deliverablesSelectedFile.embed_link ? (
+                                            <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+                                                <div style={{
+                                                    position: 'absolute', top: 0, left: 0, width: '120px', height: '48px',
+                                                    background: 'white', zIndex: 5, pointerEvents: 'none'
+                                                }} />
+                                                <iframe
+                                                    src={deliverablesSelectedFile.embed_link}
+                                                    style={{ width: '100%', height: '100%', border: 'none' }}
+                                                    title={deliverablesSelectedFile.name}
+                                                    allowFullScreen
+                                                />
+                                            </div>
+                                        ) : (
+                                            <div style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
+                                                <FileText size={64} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                                                <p style={{ fontSize: '1.1rem', margin: 0 }}>
+                                                    {deliverablesSelectedFile ? 'Loading preview...' : 'Select a file to preview'}
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
+                                    
+                                    {/* File details side panel */}
+                                    {deliverablesSelectedFile && (
+                                        <div style={{
+                                            width: '250px', background: '#E3F2FD', borderLeft: '1px solid #e0e0e0',
+                                            padding: '1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column'
+                                        }}>
+                                            <h3 style={{ marginTop: 0, fontSize: '1rem', marginBottom: '1rem' }}>File Details</h3>
+                                            <div style={{ marginBottom: '1rem' }}>
+                                                <FileText size={48} color="var(--primary)" style={{ marginBottom: '0.75rem' }} />
+                                                <p style={{ fontWeight: 600, marginBottom: '0.5rem', wordBreak: 'break-word', fontSize: '0.9rem' }}>
+                                                    {deliverablesSelectedFile.name}
+                                                </p>
+                                                <p style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.25rem' }}>
+                                                    <strong>Size:</strong> {(deliverablesSelectedFile.size / 1024).toFixed(2)} KB
+                                                </p>
+                                            </div>
+                                            {deliverablesSelectedFile.download_url && (
+                                                <a
+                                                    href={deliverablesSelectedFile.download_url}
+                                                    target="_blank" rel="noopener noreferrer"
+                                                    className="btn btn-primary"
+                                                    style={{ padding: '8px 16px', fontSize: '0.85rem', textDecoration: 'none', display: 'inline-block', alignSelf: 'flex-start' }}
+                                                >Download</a>
+                                            )}
+                                        </div>
+                                    )}
+                                </>
+                            )
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* ── OTHER TABS (placeholder) ── */}
-            {activeTab !== 'RAW FOLDER' && activeTab !== 'FOLDER SEGREGATION' && activeTab !== 'META DATA TAGGING' && activeTab !== 'LLP STATUS' && (
+            {activeTab !== 'RAW FOLDER' && activeTab !== 'FOLDER SEGREGATION' && activeTab !== 'META DATA TAGGING' && activeTab !== 'LLP STATUS' && activeTab !== 'DELIVERABLES' && (
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--background)' }}>
                     <div style={{ textAlign: 'center', opacity: 0.5 }}>
                         <h2 style={{ marginBottom: '1rem' }}>{activeTab}</h2>
@@ -3042,6 +3392,52 @@ export default function EngineDetails() {
                     </div>
                 </div>
             )}
+        {/* ── FULL EXTRACTION ERROR MODAL ── */}
+        {showFullExtErrorModal && fullExtProgress && fullExtProgress.errors && (
+            <div style={{
+                position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                background: 'rgba(0,0,0,0.5)', zIndex: 9999,
+                display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>
+                <div style={{
+                    background: 'white', padding: '1.5rem', borderRadius: '12px',
+                    width: '600px', maxWidth: '90%', maxHeight: '80vh', overflowY: 'auto',
+                    boxShadow: '0 10px 25px rgba(0,0,0,0.2)'
+                }}>
+                    <h3 style={{ marginTop: 0, color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <AlertCircle size={24} /> Text Extraction Errors
+                    </h3>
+                    {fullExtProgress.errors.length === 0 ? (
+                        <p style={{ color: '#16a34a', fontWeight: 600 }}>No errors encountered.</p>
+                    ) : (
+                        <div>
+                            <p style={{ fontSize: '0.9rem', color: '#444', marginBottom: '1rem' }}>
+                                The following files encountered errors during full engine text extraction:
+                            </p>
+                            <div style={{ background: '#f8717111', border: '1px solid #fca5a5', borderRadius: '8px', padding: '10px' }}>
+                                {fullExtProgress.errors.map((err, i) => (
+                                    <div key={i} style={{ padding: '8px 0', borderBottom: i < fullExtProgress.errors.length - 1 ? '1px solid #fecaca' : 'none' }}>
+                                        <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#991b1b', wordBreak: 'break-word' }}>📄 {err.file_name}</div>
+                                        <div style={{ fontSize: '0.8rem', color: '#b91c1c', marginTop: '3px' }}>{err.reason}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    <div style={{ marginTop: '1.5rem', textAlign: 'right' }}>
+                        <button
+                            onClick={() => setShowFullExtErrorModal(false)}
+                            style={{
+                                padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db',
+                                background: '#f3f4f6', cursor: 'pointer', fontWeight: 600, color: '#374151'
+                            }}
+                        >
+                            Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
         </div>
 
     );

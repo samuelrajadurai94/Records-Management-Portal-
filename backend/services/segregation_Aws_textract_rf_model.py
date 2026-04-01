@@ -424,9 +424,198 @@ def _classify_pdf_bytes(pdf_bytes: bytes, filename: str) -> dict:
     return result
 
 # ─────────────────────────────────────────────────────────────
+# FULL ENGINE TEXT EXTRACTION (AWS Textract fallback)
+# ─────────────────────────────────────────────────────────────
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+_full_extraction_status: dict[int, dict] = {}
+_full_extraction_lock = threading.Lock()
+
+def get_full_extraction_status(engine_id: int) -> dict:
+    return _full_extraction_status.get(engine_id, {"status": "idle", "total": 0, "completed": 0, "errors": []})
+
+def _extract_text_aws_pipeline(pdf_bytes: bytes, filename: str) -> dict:
+    result = {
+        "text_extraction_status": "",
+        "raw_text": "",
+        "cleaned_text": "",
+        "reason": "",
+    }
+    try:
+        pdf_doc = fitz.open(stream=BytesIO(pdf_bytes), filetype="pdf")
+        all_text = ""
+        for i in range(min(len(pdf_doc), 50)):
+            t = pdf_doc[i].get_text("text")
+            all_text += t
+        num_pages = len(pdf_doc)
+        pdf_doc.close()
+
+        clean = _remove_symbols(all_text)
+        readable, score, valid = _check_readability(clean)
+        final_valid = [w for w in valid if w.lower() not in STOPLIST]
+
+        if not all_text.strip() or len(final_valid) < 3:
+            # Fallback to Textract
+            ocr_text, _ = extract_text_textract_pdf_detect_doc(pdf_bytes)
+            clean = _remove_symbols(ocr_text)
+            readable, score, valid = _check_readability(clean)
+            
+            result["raw_text"] = ocr_text
+            result["cleaned_text"] = clean
+            if readable and len(valid) > 10:
+                result["text_extraction_status"] = "OCR readable"
+                result["reason"] = f"OCR ratio: {score:.2f}"
+            else:
+                result["text_extraction_status"] = "OCR not readable"
+                result["reason"] = f"OCR ratio: {score:.2f}"
+        else:
+            result["raw_text"] = all_text
+            result["cleaned_text"] = clean
+            if readable and len(final_valid) > 10:
+                result["text_extraction_status"] = "PDF readable"
+                result["reason"] = f"PDF ratio: {score:.2f}"
+            else:
+                result["text_extraction_status"] = "PDF not readable"
+                result["reason"] = f"PDF ratio: {score:.2f}"
+                
+    except Exception as e:
+        result["text_extraction_status"] = "Error"
+        result["reason"] = str(e)
+        
+    result["raw_text"] = _sanitize_text(result["raw_text"])
+    result["cleaned_text"] = _sanitize_text(result["cleaned_text"])
+    result["reason"] = _sanitize_text(result["reason"])
+    return result
+
+def _extract_single_file_full(rid: int, box_file_id: str, box_file_name: str, existing_raw_text: str, engine_csn: int) -> dict:
+    result = {
+        "row_id": rid,
+        "box_file_name": box_file_name,
+        "extracted_new": False,
+        "raw_text": existing_raw_text or "",
+        "cleaned_text": "",
+        "text_extraction_status": "",
+        "reason": "",
+        "latest": False,
+        "error": None
+    }
+    try:
+        if existing_raw_text and existing_raw_text.strip():
+            result["latest"] = check_latest([existing_raw_text], engine_csn)
+        else:
+            pdf_bytes = box_service.client.downloads.download_file(box_file_id).read()
+            ext_result = _extract_text_aws_pipeline(pdf_bytes, box_file_name) 
+            result["raw_text"] = ext_result["raw_text"]
+            result["cleaned_text"] = ext_result["cleaned_text"]
+            result["text_extraction_status"] = ext_result["text_extraction_status"]
+            result["reason"] = ext_result["reason"]
+            result["extracted_new"] = True
+            result["latest"] = check_latest([result["raw_text"]], engine_csn)
+            
+            if "error" in ext_result["text_extraction_status"].lower():
+                result["error"] = ext_result["reason"]
+    except Exception as e:
+        result["text_extraction_status"] = "Download/Processing error"
+        result["reason"] = str(e)
+        result["error"] = str(e)
+        result["extracted_new"] = True
+    return result
+
+def perform_full_engine_text_extraction(engine_id: int, db: Session):
+    with _full_extraction_lock:
+        _full_extraction_status[engine_id] = {"status": "running", "total": 0, "completed": 0, "errors": []}
+    try:
+        from sqlalchemy import func
+        
+
+        engine = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
+        if not engine:
+            with _full_extraction_lock:
+                _full_extraction_status[engine_id] = {"status": "error", "total": 0, "completed": 0, "errors": []}
+            return
+            
+        engine_csn = engine.csn_value or 0
+        rows = (
+            db.query(models.SegregationResult)
+            .filter(
+                models.SegregationResult.engine_id == engine_id,
+                func.lower(models.SegregationResult.box_file_name).like("%.pdf")
+            )
+            .all()
+        )
+        total = len(rows)
+        print(f"[FullEngineExtraction] Engine {engine_id}: found {total} files to process")
+
+        with _full_extraction_lock:
+            _full_extraction_status[engine_id]["total"] = total
+            _full_extraction_status[engine_id]["errors"] = []
+
+        if total == 0:
+            with _full_extraction_lock:
+                _full_extraction_status[engine_id] = {"status": "done", "total": 0, "completed": 0, "errors": []}
+            return
+
+        work_items = [(r.id, r.box_file_id, r.box_file_name, r.raw_text, engine_csn) for r in rows]
+        _db_write_lock = threading.Lock()
+        completed = 0
+
+        # Import META_WORKERS dynamically to avoid circular issues
+        from services.Metadata_tagging import META_WORKERS
+        
+        with ThreadPoolExecutor(max_workers=META_WORKERS) as executor:
+            future_to_item = {
+                executor.submit(_extract_single_file_full, rid, bfid, bfname, raw, csn): bfname
+                for rid, bfid, bfname, raw, csn in work_items
+            }
+            for future in as_completed(future_to_item):
+                bfname = future_to_item[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    print(f"[FullEngineExtraction] Thread error for {bfname}: {e}")
+                    result = {"row_id": -1, "box_file_name": bfname, "extracted_new": False, "latest": False, "error": f"Thread error: {str(e)}"}
+
+                if result.get("error"):
+                    with _full_extraction_lock:
+                        _full_extraction_status[engine_id]["errors"].append({"file_name": result["box_file_name"], "reason": result["error"]})
+
+                if result["row_id"] != -1:
+                    with _db_write_lock:
+                        try:
+                            row = db.query(models.SegregationResult).filter(models.SegregationResult.id == result["row_id"]).first()
+                            if row:
+                                row.latest = result.get("latest", False)
+                                if result.get("extracted_new"):
+                                    row.raw_text = result["raw_text"]
+                                    row.cleaned_text = result["cleaned_text"]
+                                    row.text_extraction_status = result["text_extraction_status"]
+                                    row.reason = result["reason"]
+                                db.commit()
+                        except Exception as db_err:
+                            db.rollback()
+                            with _full_extraction_lock:
+                                _full_extraction_status[engine_id]["errors"].append({"file_name": result["box_file_name"], "reason": f"DB Save Error: {str(db_err)}"})
+
+                completed += 1
+                with _full_extraction_lock:
+                    _full_extraction_status[engine_id]["completed"] = completed
+
+        print(f"[FullEngineExtraction] Engine {engine_id}: ✔ Done")
+        with _full_extraction_lock:
+            _full_extraction_status[engine_id]["status"] = "done"
+
+    except Exception as exec_err:
+        print(f"[FullEngineExtraction] Failed for engine {engine_id}: {exec_err}")
+        with _full_extraction_lock:
+            _full_extraction_status[engine_id]["status"] = "error"
+            _full_extraction_status[engine_id]["errors"].append({"file_name": "Pipeline Execution", "reason": str(exec_err)})
+
+# ─────────────────────────────────────────────────────────────
 # BOX FOLDER WALKER
 # ─────────────────────────────────────────────────────────────
 def _walk_box_folder(folder_id: str, folder_path: str = "") -> list[dict]:
+
     """Recursively walk Box folder. Returns flat list of file dicts."""
     all_files = []
     items = box_service.get_folder_items(folder_id)

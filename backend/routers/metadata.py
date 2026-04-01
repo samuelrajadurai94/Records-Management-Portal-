@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 import database, models, dependencies
 from services import Metadata_tagging as meta_service
+from services import segregation_Aws_textract_rf_model as seg_aws_service
 
 router = APIRouter(prefix="/metadata", tags=["metadata"])
 
@@ -44,6 +45,53 @@ def run_text_extraction(
     background_tasks.add_task(run_task)
     return {"message": "Text extraction started", "status": "running"}
 
+@router.post("/extract-text/full-engine/{engine_id}")
+def run_full_engine_text_extraction(
+    engine_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """Trigger background full-engine text extraction. Evaluates all PDFs."""
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    current_status = seg_aws_service.get_full_extraction_status(engine_id)
+    if current_status["status"] == "running":
+        return {"message": "Full engine extraction already in progress", "status": "running"}
+
+    def run_task():
+        bg_db = next(database.get_db())
+        try:
+            seg_aws_service.perform_full_engine_text_extraction(engine_id, bg_db)
+        finally:
+            bg_db.close()
+
+    background_tasks.add_task(run_task)
+    return {"message": "Full engine text extraction started", "status": "running"}
+
+@router.get("/extract-text/full-engine/status/{engine_id}")
+def get_full_engine_extraction_status(
+    engine_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """Returns current full extraction job status: idle | running | done | error, with error list."""
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    status = seg_aws_service.get_full_extraction_status(engine_id)
+    return status
 
 @router.get("/extract-text/status/{engine_id}")
 def get_extraction_status(

@@ -1,4 +1,4 @@
-﻿"""
+"""
 routers/segregation.py
 ----------------------
 Endpoints for triggering and retrieving virtual folder segregation.
@@ -145,19 +145,21 @@ def get_segregation_results(
     if not rows:
         return {
             "status": mem_status,
-            "summary": {"total_files": 0, "pdf_files": 0, "media_files": 0, "other_files": 0, "categories_found": 0},
+            "summary": {"total_files": 0, "pdf_files": 0, "pdfs_with_text": 0, "media_files": 0, "other_files": 0, "categories_found": 0},
             "segregated": {},
         }
     resolved_status = mem_status if mem_status in ("running", "error") else "done"
 
     MEDIA_EXT = {".mp4", ".png", ".jpeg", ".jpg", ".tif", ".heic", ".bmp"}
-    pdf_count = media_count = other_count = 0
-
+    pdf_count = media_count = other_count = pdf_with_text_count = 0
+    
     segregated = defaultdict(list)
     for r in rows:
         ext = ("." + r.box_file_name.rsplit(".", 1)[-1]).lower() if "." in r.box_file_name else ""
         if ext == ".pdf":
             pdf_count += 1
+            if r.raw_text and r.raw_text.strip():
+                pdf_with_text_count += 1
         elif ext in MEDIA_EXT:
             media_count += 1
         else:
@@ -187,6 +189,7 @@ def get_segregation_results(
         "summary": {
             "total_files":      len(rows),
             "pdf_files":        pdf_count,
+            "pdfs_with_text":   pdf_with_text_count,
             "media_files":      media_count,
             "other_files":      other_count,
             "categories_found": len(sorted_seg),
@@ -722,8 +725,10 @@ def check_saved_to_box_status(
         
     try:
         items = box_service.get_folder_items(engine.box_folder_id)
-        has_segregated = any(f["name"] == "Segregated Folder" for f in items.get("folders", []))
-        return {"saved": has_segregated}
+        for f in items.get("folders", []):
+            if f["name"] == "Segregated Folder":
+                return {"saved": True, "folder_id": f["id"]}
+        return {"saved": False, "folder_id": None}
     except Exception as e:
         print(f"Error checking saved status: {e}")
         return {"saved": False}
