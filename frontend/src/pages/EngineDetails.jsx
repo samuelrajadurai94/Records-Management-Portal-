@@ -3078,22 +3078,34 @@ export default function EngineDetails() {
 
                         {segStatus === 'done' && (
                             <div style={{ display: 'flex', gap: '10px', marginLeft: 'auto' }}>
+                                {isBoxSaved && (
+                                    <span style={{ 
+                                        display: 'flex', alignItems: 'center', gap: '4px',
+                                        padding: '7px 12px', borderRadius: '8px', 
+                                        background: '#ecfdf5', color: '#059669', 
+                                        fontWeight: 700, fontSize: '0.8rem',
+                                        border: '1px solid #a7f3d0'
+                                    }}>
+                                        <CheckCircle size={14} /> Saved to Box
+                                    </span>
+                                )}
                                 <button
                                     onClick={handleSaveToBox}
-                                    disabled={boxExportStatus === 'running' || isBoxSaved}
+                                    disabled={boxExportStatus === 'running'}
+                                    title={isBoxSaved ? 'Overwrite existing save in Box' : 'Save structure to Box'}
                                     style={{
                                         display: 'flex', alignItems: 'center', gap: '8px',
                                         padding: '7px 16px', borderRadius: '8px', border: 'none',
-                                        background: isBoxSaved ? '#10b981' : (boxExportStatus === 'running' ? '#94a3b8' : '#0ea5e9'),
+                                        background: boxExportStatus === 'running' ? '#94a3b8' : '#0ea5e9',
                                         color: 'white', fontWeight: 700, fontSize: '0.8rem',
-                                        cursor: (boxExportStatus === 'running' || isBoxSaved) ? 'not-allowed' : 'pointer',
-                                        boxShadow: isBoxSaved ? '0 2px 6px rgba(16,185,129,0.3)' : '0 2px 6px rgba(14,165,233,0.3)',
+                                        cursor: boxExportStatus === 'running' ? 'not-allowed' : 'pointer',
+                                        boxShadow: '0 2px 6px rgba(14,165,233,0.3)',
                                     }}
                                 >
-                                    {boxExportStatus === 'running' ? <Loader size={13} className="spinner" /> : (isBoxSaved ? <CheckCircle size={13} /> : <Cloud size={13} />)}
+                                    {boxExportStatus === 'running' ? <Loader size={13} className="spinner" /> : <Cloud size={13} />}
                                     {boxExportStatus === 'running'
                                         ? `Saving to Box... ${boxExportProgress}%`
-                                        : (isBoxSaved ? '✅ Saved to Box' : '☁️ Save to Box')}
+                                        : (isBoxSaved ? '🔄 Re-save to Box' : '☁️ Save to Box')}
                                 </button>
                                 <button
                                     onClick={handleDownloadZip}
@@ -3230,33 +3242,19 @@ export default function EngineDetails() {
                         </div>
                     )}
 
-                    {/* ── Stats Cards ── */}
+                    {/* ── Summary Bar ── */}
                     {fileStats && (
                         <div style={{
                             background: 'white', borderBottom: '1px solid #edf2f7',
-                            padding: '0.75rem 1rem', display: 'flex', gap: '12px', flexWrap: 'wrap'
+                            padding: '0.75rem 1rem', display: 'flex', gap: '12px', flexWrap: 'wrap',
+                            fontSize: '0.75rem', color: '#555'
                         }}>
-                            {[
-                                { label: 'Total Files', value: fileStats.total_files, icon: '📁', color: '#3b82f6', bg: '#eff6ff' },
-                                { label: 'PDF Files', value: fileStats.total_pdf_files, icon: '📄', color: '#7c3aed', bg: '#f5f3ff' },
-                                { label: 'Media Files', value: fileStats.media_files, icon: '🎥', color: '#ec4899', bg: '#fdf2f8' },
-                                { label: 'Other Files', value: fileStats.other_files, icon: '📎', color: '#f59e0b', bg: '#fffbeb' },
-                                { label: 'PDFs with Text', value: fileStats.pdfs_with_text, icon: '✅', color: '#16a34a', bg: '#f0fdf4' },
-                                { label: 'Tagged Files 🏷️', value: fileStats.files_with_tags ?? 0, icon: '🤖', color: '#0369a1', bg: '#e0f2fe' },
-                            ].map(stat => (
-                                <div key={stat.label} style={{
-                                    background: stat.bg, border: `1px solid ${stat.color}22`,
-                                    borderRadius: '10px', padding: '10px 18px',
-                                    display: 'flex', alignItems: 'center', gap: '10px',
-                                    minWidth: '160px'
-                                }}>
-                                    <span style={{ fontSize: '1.3rem' }}>{stat.icon}</span>
-                                    <div>
-                                        <div style={{ fontSize: '1.1rem', fontWeight: 700, color: stat.color }}>{stat.value}</div>
-                                        <div style={{ fontSize: '0.7rem', color: '#888', fontWeight: 600 }}>{stat.label}</div>
-                                    </div>
-                                </div>
-                            ))}
+                            <span>📂 <b>{fileStats.total_files}</b> files</span>
+                            <span>📄 <b>{fileStats.total_pdf_files}</b> PDFs</span>
+                            <span>📄 <b>{fileStats.pdfs_with_text}</b> PDFs with text</span>
+                            <span>🖼 <b>{fileStats.media_files}</b> media</span>
+                            <span>📎 <b>{fileStats.other_files}</b> other</span>
+                            <span>🏷️ <b>{fileStats.files_with_tags ?? 0}</b> tagged</span>
                         </div>
                     )}
 
