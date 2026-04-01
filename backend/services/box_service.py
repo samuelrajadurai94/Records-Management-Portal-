@@ -5,6 +5,16 @@ from io import BytesIO
 from box_sdk_gen import BoxClient, BoxJWTAuth, JWTConfig
 from box_sdk_gen.managers.uploads import UploadFileAttributes, UploadFileAttributesParentField, UploadFileVersionAttributes
 from box_sdk_gen.managers.folders import CreateFolderParent
+from box_sdk_gen.managers.shared_links_folders import (
+    AddShareLinkToFolderSharedLink,
+    AddShareLinkToFolderSharedLinkAccessField,
+    AddShareLinkToFolderSharedLinkPermissionsField,
+)
+from box_sdk_gen.managers.shared_links_files import (
+    AddShareLinkToFileSharedLink,
+    AddShareLinkToFileSharedLinkAccessField,
+    AddShareLinkToFileSharedLinkPermissionsField,
+)
 import time
 
 # Constants
@@ -29,6 +39,48 @@ class BoxService:
             print("Box Authorization Successful (box-sdk-gen)")
         except Exception as e:
             print(f"Box Authorization Failed: {e}")
+
+    def get_folder_shared_link(self, folder_id):
+        """Get or create an open shared link for a folder with preview/download access"""
+        if not self.client: return None
+        try:
+            shared_link_config = AddShareLinkToFolderSharedLink(
+                access=AddShareLinkToFolderSharedLinkAccessField.OPEN,
+                permissions=AddShareLinkToFolderSharedLinkPermissionsField(
+                    can_download=True,
+                    can_preview=True,
+                ),
+            )
+            folder = self.client.shared_links_folders.add_share_link_to_folder(
+                folder_id=folder_id,
+                shared_link=shared_link_config,
+                fields=["shared_link"],
+            )
+            return folder.shared_link.url if folder.shared_link else None
+        except Exception as e:
+            print(f"Failed to get shared link for folder {folder_id}: {e}")
+            return None
+
+    def get_file_shared_link(self, file_id):
+        """Get or create an open shared link for a file with preview/download access"""
+        if not self.client: return None
+        try:
+            shared_link_config = AddShareLinkToFileSharedLink(
+                access=AddShareLinkToFileSharedLinkAccessField.OPEN,
+                permissions=AddShareLinkToFileSharedLinkPermissionsField(
+                    can_download=True,
+                    can_preview=True,
+                ),
+            )
+            file_obj = self.client.shared_links_files.add_share_link_to_file(
+                file_id=file_id,
+                shared_link=shared_link_config,
+                fields=["shared_link"],
+            )
+            return file_obj.shared_link.url if file_obj.shared_link else None
+        except Exception as e:
+            print(f"Failed to get shared link for file {file_id}: {e}")
+            return None
 
     def chunked_upload_file(self, parent_folder_id, file_path):
         """Upload large files (50MB+) using chunked upload"""

@@ -610,6 +610,30 @@ def get_file_url(engine_id: int, file_id: str, db: Session = Depends(database.ge
         "embed_link": embed_link
     }
 
+@router.get("/{engine_id}/box-folder-share/{folder_id}")
+def get_folder_share_link(engine_id: int, folder_id: str, db: Session = Depends(database.get_db), current_user: models.User = Depends(dependencies.get_current_user)):
+    """Get a shared link for a Box folder"""
+    engine = db.query(models.Engine).filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id).first()
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+    
+    url = box_service.get_folder_shared_link(folder_id)
+    if not url:
+        raise HTTPException(status_code=500, detail="Failed to generate shared link for folder")
+    return {"shared_link": url}
+
+@router.get("/{engine_id}/box-file-share/{file_id}")
+def get_file_share_link(engine_id: int, file_id: str, db: Session = Depends(database.get_db), current_user: models.User = Depends(dependencies.get_current_user)):
+    """Get a shared link for a Box file"""
+    engine = db.query(models.Engine).filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id).first()
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+    
+    url = box_service.get_file_shared_link(file_id)
+    if not url:
+        raise HTTPException(status_code=500, detail="Failed to generate shared link for file")
+    return {"shared_link": url}
+
 @router.delete("/{engine_id}")
 def delete_engine(engine_id: int, db: Session = Depends(database.get_db), current_user: models.User = Depends(dependencies.get_current_user)):
     """Delete an engine and its associated Box folder"""

@@ -4,7 +4,7 @@ import api from '../api';
 import {
     FileText, Folder, FolderOpen, ChevronRight, ChevronDown,
     ArrowLeft, Search, SortAsc, CheckSquare, LogOut, Loader, X,
-    Shuffle, CheckCircle, AlertCircle, Info, Clock, Save, Edit3, Eye, ShieldAlert, Settings, Download, Cloud
+    Shuffle, CheckCircle, AlertCircle, Info, Clock, Save, Edit3, Eye, ShieldAlert, Settings, Download, Cloud, Share2
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -871,6 +871,7 @@ export default function EngineDetails() {
     const [expandedDeliverablesFolders, setExpandedDeliverablesFolders] = useState({});
     const [deliverablesSelectedFile, setDeliverablesSelectedFile] = useState(null);
     const [deliverablesActiveSubTab, setDeliverablesActiveSubTab] = useState(null);
+    const [sharedLinkModal, setSharedLinkModal] = useState(null); // { name, link }
 
     const tabs = ['RAW FOLDER', 'FOLDER SEGREGATION', 'META DATA TAGGING', 'LLP STATUS', 'OPEN ITEM LIST', 'LLP TRACE', 'DELIVERABLES'];
 
@@ -1286,6 +1287,25 @@ export default function EngineDetails() {
         }
     };
 
+    const handleShareLink = async (e, type, item) => {
+        e.stopPropagation();
+        e.preventDefault();
+        try {
+            const endpoint = type === 'folder' 
+                ? `/engines/${id}/box-folder-share/${item.id}`
+                : `/engines/${id}/box-file-share/${item.id || item.box_file_id}`;
+            const res = await api.get(endpoint);
+            if (res.data && res.data.shared_link) {
+                setSharedLinkModal({ name: item.name, link: res.data.shared_link });
+            } else {
+                throw new Error("No link returned from server");
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Failed to generate shared link. Check console for details.');
+        }
+    };
+
     const toggleDeliverablesFolder = async (folderId) => {
         const isExpanded = !!expandedDeliverablesFolders[folderId];
         if (!isExpanded) {
@@ -1462,9 +1482,30 @@ export default function EngineDetails() {
                 onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
             >
                 <FileText size={14} style={{ marginRight: '8px', flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {file.name}
                 </span>
+                <button
+                    onClick={(e) => handleShareLink(e, 'file', file)}
+                    style={{
+                        background: '#f0f9ff', border: '1px solid #0284c7', cursor: 'pointer',
+                        color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        padding: '4px', marginLeft: '4px', borderRadius: '50%',
+                        transition: 'all 0.2s ease',
+                        width: '24px', height: '24px'
+                    }}
+                    onMouseEnter={(e) => {
+                        e.currentTarget.style.background = '#0284c7';
+                        e.currentTarget.style.color = 'white';
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.background = '#f0f9ff';
+                        e.currentTarget.style.color = '#0284c7';
+                    }}
+                    title="Get Shared Link"
+                >
+                    <Share2 size={12} />
+                </button>
             </div>
         );
     };
@@ -1491,15 +1532,37 @@ export default function EngineDetails() {
                         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </span>
                     {isExpanded
-                        ? <FolderOpen size={16} style={{ marginRight: '8px' }} />
-                        : <Folder size={16} style={{ marginRight: '8px' }} />}
-                    <span>{item.name}</span>
+                        ? <FolderOpen size={16} style={{ marginRight: '8px', flexShrink: 0 }} />
+                        : <Folder size={16} style={{ marginRight: '8px', flexShrink: 0 }} />}
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
                     {item.file_count > 0 && (
                         <span style={{
-                            marginLeft: 'auto', fontSize: '0.75rem', opacity: 0.7,
-                            background: '#e0e0e0', padding: '2px 6px', borderRadius: '10px'
+                            fontSize: '0.75rem', opacity: 0.7,
+                            background: '#e0e0e0', padding: '2px 6px', borderRadius: '10px',
+                            marginRight: '8px'
                         }}>{item.file_count}</span>
                     )}
+                    <button
+                        onClick={(e) => handleShareLink(e, 'folder', item)}
+                        style={{
+                            background: '#f0f9ff', border: '1px solid #0284c7', cursor: 'pointer',
+                            color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            padding: '4px', borderRadius: '50%',
+                            transition: 'all 0.2s ease',
+                            width: '24px', height: '24px'
+                        }}
+                        onMouseEnter={(e) => {
+                            e.currentTarget.style.background = '#0284c7';
+                            e.currentTarget.style.color = 'white';
+                        }}
+                        onMouseLeave={(e) => {
+                            e.currentTarget.style.background = '#f0f9ff';
+                            e.currentTarget.style.color = '#0284c7';
+                        }}
+                        title="Get Shared Link"
+                    >
+                        <Share2 size={12} />
+                    </button>
                 </div>
                 {isExpanded && item.children && item.children.length > 0 &&
                     item.children.map(child => <DeliverablesFolderTreeItem key={child.id} item={child} level={level + 1} />)}
@@ -3389,6 +3452,62 @@ export default function EngineDetails() {
                     <div style={{ textAlign: 'center', opacity: 0.5 }}>
                         <h2 style={{ marginBottom: '1rem' }}>{activeTab}</h2>
                         <p>This feature is coming soon.</p>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Shared Link Modal ── */}
+            {sharedLinkModal && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.5)', zIndex: 99999,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }}>
+                    <div style={{
+                        background: 'white', padding: '24px', borderRadius: '12px',
+                        width: '450px', maxWidth: '90%', boxShadow: '0 10px 25px rgba(0,0,0,0.2)'
+                    }}>
+                        <h3 style={{ marginTop: 0, marginBottom: '16px', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Share2 size={20} color="var(--primary)" />
+                            Shared Link for {sharedLinkModal.name}
+                        </h3>
+                        <input 
+                            type="text" 
+                            value={sharedLinkModal.link} 
+                            readOnly 
+                            style={{
+                                width: '100%', padding: '10px', borderRadius: '6px',
+                                border: '1px solid #cbd5e1', marginBottom: '16px',
+                                fontSize: '0.9rem', color: '#334155', background: '#f8fafc'
+                            }}
+                            onClick={(e) => e.target.select()}
+                        />
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                            <button
+                                onClick={() => setSharedLinkModal(null)}
+                                style={{
+                                    padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1',
+                                    background: 'white', color: '#475569', cursor: 'pointer', fontWeight: 600
+                                }}
+                            >
+                                Close
+                            </button>
+                            <button
+                                onClick={() => {
+                                    if (navigator.clipboard) {
+                                        navigator.clipboard.writeText(sharedLinkModal.link).then(() => {
+                                            alert('Link copied to clipboard!');
+                                        }).catch(console.error);
+                                    }
+                                }}
+                                style={{
+                                    padding: '8px 16px', borderRadius: '6px', border: 'none',
+                                    background: 'var(--primary)', color: 'white', cursor: 'pointer', fontWeight: 600
+                                }}
+                            >
+                                Copy Link
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
