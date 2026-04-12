@@ -64,6 +64,10 @@ def run_box_segregation(
     if current_status == "running":
         return {"message": "Segregation already in progress", "status": "running"}
 
+    # Set status synchronously so polling immediately returns "running" — prevents
+    # re-run race condition where the old "done" status is seen on the first poll.
+    seg_service._job_status[engine_id] = "running"
+
     # Use a NEW db session inside the background task (sessions aren't thread-safe)
     def run_task():
         bg_db = next(database.get_db())
@@ -441,26 +445,43 @@ def _build_segregation_zip(engine_id: int, category: str = None):
             
         temp_dir = tempfile.mkdtemp(prefix=f"zip_{engine_id}_{category or 'All'}_")
         total = len(rows)
-        
-        TREE_METHODS = {"Folder Match", "Extension", "Unclassified", "Manual"}
+
+        # AI methods that produce no sub-folder hierarchy (placed flat under category/)
+        AI_FLAT_METHODS = {"Direct Keyword", "AI MODEL"}
         
         for i, row in enumerate(rows):
-            # Clean category name
             safe_category = "".join(c for c in row.category if c not in r'<>:"/\|?*').strip()
             base_path = os.path.join(temp_dir, safe_category)
-            
-            if row.latest:
-                target_dir = os.path.join(base_path, "â­ Latest")
-            elif row.method in TREE_METHODS:
+
+            if row.method == "Skip Segregation":
+                # Maintain the EXACT same hierarchy logic used in the frontend UI viewer:
+                # 1. Strip the root segment ("RAW FOLDER") 
+                # 2. If the next segment is exactly the category name, strip it too.
+                # Do not strip wrapper folders unexpectedly.
+                path_str = row.original_folder_path or ""
+                all_parts = [p.strip() for p in path_str.split("/") if p.strip()]
+                
+                sub_parts = all_parts[1:] if len(all_parts) > 0 else []
+                if sub_parts and sub_parts[0] == row.category:
+                    sub_parts = sub_parts[1:]
+                
+                sub_parts = ["".join(c for c in p if c not in r'<>:"/\|?*') for p in sub_parts]
+                target_dir = os.path.join(base_path, *sub_parts) if sub_parts else base_path
+
+            elif row.latest:
+                # AI-segregated latest → virtual ⭐ Latest sub-folder
+                target_dir = os.path.join(base_path, "\u2b50 Latest")
+
+            elif row.method not in AI_FLAT_METHODS:
+                # Folder Match / Extension / Unclassified / Manual — use folder path
                 path_str = row.original_folder_path or ""
                 parts = [p.strip() for p in path_str.split("/") if p.strip()]
-                # UI logic: skip the first segment (root/engine folder)
-                sub_parts = parts[1:] if len(parts) > 0 else []
-                # Clean sub_parts for safe folder names
+                sub_parts = parts[1:] if parts else []
                 sub_parts = ["".join(c for c in p if c not in r'<>:"/\|?*') for p in sub_parts]
-                
                 target_dir = os.path.join(base_path, *sub_parts) if sub_parts else base_path
+
             else:
+                # AI MODEL / Direct Keyword — flat under category
                 target_dir = base_path
                 
             os.makedirs(target_dir, exist_ok=True)
@@ -565,8 +586,8 @@ def download_segregation_zip(
     def cleanup():
         try:
             os.remove(zip_path)
-            if engine_id in zip_tasks:
-                del zip_tasks[engine_id]
+            if task_key in zip_tasks:
+                del zip_tasks[task_key]
         except Exception as e:
             print(f"Failed to cleanup zip {zip_path}: {e}")
 
@@ -601,44 +622,69 @@ def _export_segregation_to_box(engine_id: int):
         if not rows:
             box_export_tasks[engine_id] = {"status": "error", "progress": 0, "error": "No segregated files to export"}
             return
-            
+
         # 1. Create root "Segregated Folder"
         root_folder = box_service.get_or_create_folder("Segregated Folder", engine.box_folder_id)
         if not root_folder:
             box_export_tasks[engine_id] = {"status": "error", "progress": 0, "error": "Could not create root Segregated Folder in Box"}
             return
-            
+
         # 2. Build unique folder paths
-        TREE_METHODS = {"Folder Match", "Extension", "Unclassified", "Manual"}
+        # "Skip Segregation" uses path-based hierarchy just like Folder Match / Extension.
+        # AI-method files (Direct Keyword, AI MODEL) go flat → just category/.
+        AI_FLAT_METHODS = {"Direct Keyword", "AI MODEL"}
         folder_paths = set()
-        file_destinations = [] # (row, expected_folder_path)
-        
+        file_destinations = []  # (row, expected_folder_path)
+
         for row in rows:
             safe_category = "".join(c for c in row.category if c not in r'<>:"/\|?*').strip()
-            
-            if row.latest:
-                folder_path = f"{safe_category}/â­ Latest"
-            elif row.method in TREE_METHODS:
+
+            if row.method == "Skip Segregation":
+                # Maintain the EXACT same hierarchy logic used in the frontend UI viewer:
+                # 1. Strip the root segment ("RAW FOLDER") 
+                # 2. If the next segment is exactly the category name, strip it too.
+                # Do not strip wrapper folders unexpectedly.
+                path_str = row.original_folder_path or ""
+                all_parts = [p.strip() for p in path_str.split("/") if p.strip()]
+                
+                sub_parts = all_parts[1:] if len(all_parts) > 0 else []
+                if sub_parts and sub_parts[0] == row.category:
+                    sub_parts = sub_parts[1:]
+
+                # Sanitise each segment
+                sub_parts = ["".join(c for c in p if c not in r'<>:"/\|?*').strip() for p in sub_parts]
+                if sub_parts:
+                    folder_path = f"{safe_category}/" + "/".join(sub_parts)
+                else:
+                    folder_path = safe_category
+
+            elif row.latest:
+                # AI-segmented latest files → ⭐ Latest sub-folder inside category
+                folder_path = f"{safe_category}/⭐ Latest"
+
+            elif row.method not in AI_FLAT_METHODS:
+                # Folder Match / Extension / Unclassified / Manual — use folder path
                 path_str = row.original_folder_path or ""
                 parts = [p.strip() for p in path_str.split("/") if p.strip()]
-                # UI logic: skip the first segment (root/engine folder)
+                # Skip the first segment (root/engine folder)
                 sub_parts = parts[1:] if len(parts) > 0 else []
                 sub_parts = ["".join(c for c in p if c not in r'<>:"/\|?*').strip() for p in sub_parts]
                 if sub_parts:
                     folder_path = f"{safe_category}/" + "/".join(sub_parts)
                 else:
                     folder_path = safe_category
+
             else:
-                # Flat files
+                # AI MODEL / Direct Keyword — flat under category
                 folder_path = safe_category
-                
+
             # Add all parent paths to ensure creation
-            parts = folder_path.split('/')
-            for i in range(1, len(parts) + 1):
-                folder_paths.add('/'.join(parts[:i]))
-                
+            parts_chain = folder_path.split('/')
+            for i in range(1, len(parts_chain) + 1):
+                folder_paths.add('/'.join(parts_chain[:i]))
+
             file_destinations.append((row, folder_path))
-            
+
         # 3. Create structure
         box_export_tasks[engine_id]["progress"] = 10
         # folder_mapping maps "Category/â­ Latest" -> "12345"
@@ -932,4 +978,430 @@ def global_search(
 
     ranked = sorted(scores.values(), key=lambda x: x["score"], reverse=True)
     return ranked[:200]
+
+
+# ── SKIP FOLDER SEGREGATION ────────────────────────────────────────────────────
+# Directly maps the RAW FOLDER structure into SegregationResult rows
+# without running the AI/OCR pipeline.
+#
+# Supports two layouts via `skip_levels` parameter:
+#
+# skip_levels=0 (default — categories are RAW FOLDER's direct children):
+#   RAW FOLDER/
+#   ├── 1. Certified statement/      ← category
+#   │   ├── Latest/                  ← latest=True for files inside
+#   │   └── file.pdf                 ← latest=False
+#   └── loose_file.pdf               ← Manual Segregation
+#
+# skip_levels=1 (one extra wrapper level, e.g. engine serial folder):
+#   RAW FOLDER/
+#   └── ENGINE-SERIAL/               ← skipped (wrapper)
+#       ├── 1. Certified statement/  ← category
+#       │   ├── Latest/
+#       │   └── file.pdf
+#       └── loose_file.pdf           ← Manual Segregation
+# ────────────────────────────────────────────────────────────────────────────────
+
+_skip_seg_status: dict[int, str] = {}
+_skip_seg_status_lock = __import__("threading").Lock()
+
+
+def _perform_skip_segregation_task(engine_id: int, skip_levels: int = 0):
+    """
+    Background task: walk the RAW FOLDER in Box, derive categories from subfolder
+    names at the appropriate level, flag 'Latest' sub-subfolders, and save results.
+
+    skip_levels=0 → categories are RAW FOLDER's direct children.
+    skip_levels=1 → one extra wrapper folder level is skipped before reading categories.
+    """
+    from database import SessionLocal
+    from services.box_service import box_service
+
+    db = SessionLocal()
+    try:
+        seg_service._job_status[engine_id] = "running"
+
+        engine = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
+        if not engine or not engine.box_folder_id:
+            seg_service._job_status[engine_id] = "error"
+            return
+
+        # Locate RAW FOLDER
+        raw_folder_id = box_service.get_raw_folder_id(engine.box_folder_id)
+        if not raw_folder_id:
+            raw_folder_id = engine.box_folder_id
+
+        print(f"[SkipSeg] Engine {engine_id}: RAW FOLDER id={raw_folder_id}, skip_levels={skip_levels}")
+
+        results: list[dict] = []
+
+        def is_latest_folder(name: str) -> bool:
+            return name.strip().lower() == "latest"
+
+        def walk_category_folder(cat_folder_id: str, category: str, folder_path: str):
+            """
+            Recursively walk one category folder.
+            Files directly inside → latest=False.
+            Files inside a 'Latest' sub-folder → latest=True.
+            Other sub-folders → recurse with same category, latest=False.
+            """
+            items = box_service.get_folder_items(cat_folder_id)
+
+            for f in items.get("files", []):
+                results.append({
+                    "engine_id":            engine_id,
+                    "box_file_id":          f["id"],
+                    "box_file_name":        f["name"],
+                    "box_folder_id":        cat_folder_id,
+                    "original_folder_path": folder_path,
+                    "category":             category,
+                    "prediction":           category,
+                    "confidence":           1.0,
+                    "method":               "Skip Segregation",
+                    "status":               "Skipped",
+                    "raw_text":             "",
+                    "cleaned_text":         "",
+                    "reason":               "",
+                    "latest":               False,
+                })
+
+            for sub in items.get("folders", []):
+                sub_path = f"{folder_path}/{sub['name']}"
+                if is_latest_folder(sub["name"]):
+                    # Files inside a Latest folder → latest=True
+                    latest_items = box_service.get_folder_items(sub["id"])
+                    for lf in latest_items.get("files", []):
+                        results.append({
+                            "engine_id":            engine_id,
+                            "box_file_id":          lf["id"],
+                            "box_file_name":        lf["name"],
+                            "box_folder_id":        sub["id"],
+                            "original_folder_path": sub_path,
+                            "category":             category,
+                            "prediction":           category,
+                            "confidence":           1.0,
+                            "method":               "Skip Segregation",
+                            "status":               "Skipped",
+                            "raw_text":             "",
+                            "cleaned_text":         "",
+                            "reason":               "",
+                            "latest":               True,
+                        })
+                    # Recurse deeper inside Latest in case there are nested sub-folders
+                    for sub2 in latest_items.get("folders", []):
+                        walk_category_folder(sub2["id"], category, f"{sub_path}/{sub2['name']}")
+                else:
+                    walk_category_folder(sub["id"], category, sub_path)
+
+        def process_category_level(parent_folder_id: str, parent_path: str):
+            """
+            Treat direct children of parent_folder_id as categories.
+            Files directly here → Manual Segregation.
+            Sub-folders → category name from folder name.
+            """
+            level_items = box_service.get_folder_items(parent_folder_id)
+
+            # Loose files at this level → Manual Segregation
+            for f in level_items.get("files", []):
+                results.append({
+                    "engine_id":            engine_id,
+                    "box_file_id":          f["id"],
+                    "box_file_name":        f["name"],
+                    "box_folder_id":        parent_folder_id,
+                    "original_folder_path": parent_path,
+                    "category":             "Manual Segregation",
+                    "prediction":           "Manual Segregation",
+                    "confidence":           0.0,
+                    "method":               "Skip Segregation",
+                    "status":               "Skipped",
+                    "raw_text":             "",
+                    "cleaned_text":         "",
+                    "reason":               "No parent category folder",
+                    "latest":               False,
+                })
+
+            # Sub-folders → use folder name as category
+            for cat_folder in level_items.get("folders", []):
+                cat_name = cat_folder["name"]
+                cat_path = f"{parent_path}/{cat_name}"
+                print(f"[SkipSeg] Category: {cat_name}")
+                walk_category_folder(cat_folder["id"], cat_name, cat_path)
+
+        # ── Determine starting point based on skip_levels ─────────────────────
+        if skip_levels == 0:
+            # Standard: RAW FOLDER's direct children are the categories
+            process_category_level(raw_folder_id, "RAW FOLDER")
+        else:
+            # skip_levels=1: RAW FOLDER → wrapper folder(s) → categories
+            # Collect all wrapper folders' children as category-level entries.
+            # Loose files directly in RAW FOLDER → Manual Segregation.
+            raw_items = box_service.get_folder_items(raw_folder_id)
+
+            # Loose files directly in RAW FOLDER → Manual Segregation
+            for f in raw_items.get("files", []):
+                results.append({
+                    "engine_id":            engine_id,
+                    "box_file_id":          f["id"],
+                    "box_file_name":        f["name"],
+                    "box_folder_id":        raw_folder_id,
+                    "original_folder_path": "RAW FOLDER",
+                    "category":             "Manual Segregation",
+                    "prediction":           "Manual Segregation",
+                    "confidence":           0.0,
+                    "method":               "Skip Segregation",
+                    "status":               "Skipped",
+                    "raw_text":             "",
+                    "cleaned_text":         "",
+                    "reason":               "No parent category folder",
+                    "latest":               False,
+                })
+
+            # Each direct sub-folder of RAW FOLDER is a wrapper — go one level deeper
+            for wrapper in raw_items.get("folders", []):
+                wrapper_path = f"RAW FOLDER/{wrapper['name']}"
+                print(f"[SkipSeg] Skipping wrapper: {wrapper['name']}")
+                process_category_level(wrapper["id"], wrapper_path)
+
+        total = len(results)
+        print(f"[SkipSeg] Engine {engine_id}: {total} files discovered. Saving to DB...")
+
+        # Clear existing and batch-insert
+        db.query(models.SegregationResult).filter(
+            models.SegregationResult.engine_id == engine_id
+        ).delete()
+        db.commit()
+
+        for r in results:
+            db.add(models.SegregationResult(**r))
+        db.commit()
+
+        print(f"[SkipSeg] Engine {engine_id}: ✔ Done — {total} records saved")
+        seg_service._job_status[engine_id] = "done"
+
+    except Exception as e:
+        print(f"[SkipSeg] Engine {engine_id}: ERROR — {e}")
+        import traceback; traceback.print_exc()
+        seg_service._job_status[engine_id] = "error"
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+@router.post("/skip-segregation/{engine_id}", status_code=202)
+def skip_folder_segregation(
+    engine_id: int,
+    background_tasks: BackgroundTasks,
+    skip_levels: int = Query(0, ge=0, le=1, description="0 = categories are RAW FOLDER's direct children; 1 = skip one extra wrapper level (e.g. engine serial folder)"),
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Trigger 'Skip Folder Segregation' for an engine.
+    Walks the RAW FOLDER structure in Box, uses subfolder names as categories.
+    Use skip_levels=1 when RAW FOLDER contains a wrapper folder (e.g. engine serial
+    number) before the actual category folders.
+    """
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+    if not engine.box_folder_id:
+        raise HTTPException(status_code=400, detail="Engine has no Box folder linked")
+
+    current_status = seg_service.get_job_status(engine_id)
+    if current_status == "running":
+        return {"message": "A segregation job is already running", "status": "running"}
+
+    # Set status synchronously so the polling endpoint immediately returns "running"
+    # before the background task even starts — prevents re-run race condition.
+    seg_service._job_status[engine_id] = "running"
+
+    background_tasks.add_task(_perform_skip_segregation_task, engine_id, skip_levels)
+    return {"message": "Skip segregation started", "status": "running", "skip_levels": skip_levels}
+
+    """
+    Background task: walk the RAW FOLDER in Box, derive categories from top-level
+    subfolder names, flag 'Latest' sub-subfolders, and save SegregationResult rows.
+    Shares the seg_service._job_status dict so the existing /status endpoint works.
+    """
+    from database import SessionLocal
+    from services.box_service import box_service
+
+    db = SessionLocal()
+    try:
+        # Mark running both in seg_service memory AND local cache
+        seg_service._job_status[engine_id] = "running"
+
+        engine = db.query(models.Engine).filter(models.Engine.id == engine_id).first()
+        if not engine or not engine.box_folder_id:
+            seg_service._job_status[engine_id] = "error"
+            return
+
+        # Locate RAW FOLDER
+        raw_folder_id = box_service.get_raw_folder_id(engine.box_folder_id)
+        if not raw_folder_id:
+            # Fall back to engine root itself
+            raw_folder_id = engine.box_folder_id
+
+        print(f"[SkipSeg] Engine {engine_id}: RAW FOLDER id={raw_folder_id}")
+
+        # ── Walk RAW FOLDER structure (Box API only, no downloads) ────────────
+        # Structure we expect:
+        #   RAW FOLDER/  (raw_folder_id)
+        #     <Category subfolder>/   ← top-level: category name
+        #       Latest/               ← optional: latest = True for files inside
+        #         file.pdf
+        #       file.pdf              ← latest = False
+        #     loose_file.pdf          ← no category subfolder → Manual Segregation
+
+        results: list[dict] = []
+
+        def is_latest_folder(name: str) -> bool:
+            return name.strip().lower() == "latest"
+
+        def walk_category_folder(cat_folder_id: str, category: str, folder_path: str):
+            """Walk one category subfolder. Detect 'Latest' sub-subfolders."""
+            items = box_service.get_folder_items(cat_folder_id)
+
+            # Direct files inside category folder (not in Latest) → latest=False
+            for f in items.get("files", []):
+                results.append({
+                    "engine_id":            engine_id,
+                    "box_file_id":          f["id"],
+                    "box_file_name":        f["name"],
+                    "box_folder_id":        cat_folder_id,
+                    "original_folder_path": folder_path,
+                    "category":             category,
+                    "prediction":           category,
+                    "confidence":           1.0,
+                    "method":               "Skip Segregation",
+                    "status":               "Skipped",
+                    "raw_text":             "",
+                    "cleaned_text":         "",
+                    "reason":               "",
+                    "latest":               False,
+                })
+
+            for sub in items.get("folders", []):
+                sub_path = f"{folder_path}/{sub['name']}"
+                if is_latest_folder(sub["name"]):
+                    # All files inside a 'Latest' folder → latest=True
+                    latest_items = box_service.get_folder_items(sub["id"])
+                    for lf in latest_items.get("files", []):
+                        results.append({
+                            "engine_id":            engine_id,
+                            "box_file_id":          lf["id"],
+                            "box_file_name":        lf["name"],
+                            "box_folder_id":        sub["id"],
+                            "original_folder_path": sub_path,
+                            "category":             category,
+                            "prediction":           category,
+                            "confidence":           1.0,
+                            "method":               "Skip Segregation",
+                            "status":               "Skipped",
+                            "raw_text":             "",
+                            "cleaned_text":         "",
+                            "reason":               "",
+                            "latest":               True,
+                        })
+                    # Recurse deeper inside Latest (e.g. nested sub-folders inside Latest)
+                    for sub2 in latest_items.get("folders", []):
+                        walk_category_folder(sub2["id"], category, f"{sub_path}/{sub2['name']}")
+                else:
+                    # Other sub-subfolders: recurse with same category, latest=False
+                    walk_category_folder(sub["id"], category, sub_path)
+
+        # ── Top-level traversal of RAW FOLDER ────────────────────────────────
+        raw_items = box_service.get_folder_items(raw_folder_id)
+
+        # Files directly in RAW FOLDER → Manual Segregation
+        for f in raw_items.get("files", []):
+            results.append({
+                "engine_id":            engine_id,
+                "box_file_id":          f["id"],
+                "box_file_name":        f["name"],
+                "box_folder_id":        raw_folder_id,
+                "original_folder_path": "RAW FOLDER",
+                "category":             "Manual Segregation",
+                "prediction":           "Manual Segregation",
+                "confidence":           0.0,
+                "method":               "Skip Segregation",
+                "status":               "Skipped",
+                "raw_text":             "",
+                "cleaned_text":         "",
+                "reason":               "No parent category folder",
+                "latest":               False,
+            })
+
+        # Sub-folders of RAW FOLDER → use their name as category
+        for cat_folder in raw_items.get("folders", []):
+            cat_name = cat_folder["name"]
+            cat_path = f"RAW FOLDER/{cat_name}"
+            print(f"[SkipSeg] Processing category: {cat_name}")
+            walk_category_folder(cat_folder["id"], cat_name, cat_path)
+
+        total = len(results)
+        print(f"[SkipSeg] Engine {engine_id}: {total} files discovered. Saving to DB...")
+
+        # ── Clear existing results and batch-insert new ones ─────────────────
+        db.query(models.SegregationResult).filter(
+            models.SegregationResult.engine_id == engine_id
+        ).delete()
+        db.commit()
+
+        for r in results:
+            db.add(models.SegregationResult(**r))
+        db.commit()
+
+        print(f"[SkipSeg] Engine {engine_id}: ✔ Done — {total} records saved")
+        seg_service._job_status[engine_id] = "done"
+
+    except Exception as e:
+        print(f"[SkipSeg] Engine {engine_id}: ERROR — {e}")
+        import traceback; traceback.print_exc()
+        seg_service._job_status[engine_id] = "error"
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+@router.post("/skip-segregation/{engine_id}", status_code=202)
+def skip_folder_segregation(
+    engine_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Trigger 'Skip Folder Segregation' for an engine.
+    Walks the RAW FOLDER structure in Box, uses top-level subfolder names as
+    categories, detects Latest sub-folders, and saves results to DB.
+    No OCR / AI processing is performed.
+    """
+    engine = (
+        db.query(models.Engine)
+        .filter(models.Engine.id == engine_id, models.Engine.owner_id == current_user.id)
+        .first()
+    )
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+    if not engine.box_folder_id:
+        raise HTTPException(status_code=400, detail="Engine has no Box folder linked")
+
+    current_status = seg_service.get_job_status(engine_id)
+    if current_status == "running":
+        return {"message": "A segregation job is already running", "status": "running"}
+
+    background_tasks.add_task(_perform_skip_segregation_task, engine_id)
+    return {"message": "Skip segregation started", "status": "running"}
+
 

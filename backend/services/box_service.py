@@ -1,6 +1,9 @@
 import os
 import hashlib
 import base64
+import tempfile
+import concurrent.futures
+import requests
 from io import BytesIO
 from box_sdk_gen import BoxClient, BoxJWTAuth, JWTConfig
 from box_sdk_gen.managers.uploads import UploadFileAttributes, UploadFileAttributesParentField, UploadFileVersionAttributes
@@ -82,11 +85,11 @@ class BoxService:
             print(f"Failed to get shared link for file {file_id}: {e}")
             return None
 
-    def chunked_upload_file(self, parent_folder_id, file_path):
+    def chunked_upload_file(self, parent_folder_id, file_path, file_name=None):
         """Upload large files (50MB+) using chunked upload"""
         if not self.client: return None
         
-        file_name = os.path.basename(file_path)
+        file_name = file_name or os.path.basename(file_path)
         file_size = os.path.getsize(file_path)
         
         try:
@@ -141,18 +144,18 @@ class BoxService:
             offset += limit
         return None
 
-    def upload_file(self, parent_folder_id, file_path):
+    def upload_file(self, parent_folder_id, file_path, file_name=None):
         """Upload file - uses direct or chunked based on size.
         If a file with the same name already exists in Box, uploads as a new version (v2, v3...)."""
         if not self.client: return None
 
-        file_name = os.path.basename(file_path)
+        file_name = file_name or os.path.basename(file_path)
         file_size = os.path.getsize(file_path)
 
         try:
             if file_size >= CHUNKED_UPLOAD_MINIMUM:
                 print(f"Chunked upload: {file_name}")
-                return self.chunked_upload_file(parent_folder_id, file_path)
+                return self.chunked_upload_file(parent_folder_id, file_path, file_name=file_name)
             else:
                 print(f"Direct upload: {file_name}")
                 with open(file_path, 'rb') as file_stream:
@@ -414,35 +417,53 @@ class BoxService:
             return None, errors
 
     def get_folder_items(self, folder_id):
-        """Get all items (files and folders) in a Box folder"""
+        """Get ALL items (files and folders) in a Box folder, handling pagination.
+        Box returns max 1000 items per page — this method loops until all are collected.
+        """
         if not self.client:
             return {"folders": [], "files": []}
-        
+
+        folders = []
+        files = []
+        offset = 0
+        limit = 1000  # Box's maximum items per page
+
         try:
-            items = self.client.folders.get_folder_items(folder_id)
-            folders = []
-            files = []
-            
-            for item in items.entries:
-                if item.type == "folder":
-                    folders.append({
-                        "id": item.id,
-                        "name": item.name,
-                        "type": "folder"
-                    })
-                elif item.type == "file":
-                    files.append({
-                        "id": item.id,
-                        "name": item.name,
-                        "type": "file",
-                        "size": getattr(item, 'size', 0),
-                        "modified_at": getattr(item, 'modified_at', None)
-                    })
-            
+            while True:
+                page = self.client.folders.get_folder_items(
+                    folder_id,
+                    limit=limit,
+                    offset=offset
+                )
+                entries = page.entries or []
+
+                for item in entries:
+                    if item.type == "folder":
+                        folders.append({
+                            "id":   item.id,
+                            "name": item.name,
+                            "type": "folder"
+                        })
+                    elif item.type == "file":
+                        files.append({
+                            "id":          item.id,
+                            "name":        item.name,
+                            "type":        "file",
+                            "size":        getattr(item, "size", 0),
+                            "modified_at": getattr(item, "modified_at", None)
+                        })
+
+                # If the page is smaller than the limit we've reached the last page
+                if len(entries) < limit:
+                    break
+                offset += limit
+
             return {"folders": folders, "files": files}
+
         except Exception as e:
             print(f"Error getting folder items for {folder_id}: {e}")
             return {"folders": [], "files": []}
+
 
     def get_folder_hierarchy(self, folder_id):
         """Get top-level contents of a folder for lazy-loading structure"""
@@ -564,6 +585,20 @@ class BoxService:
             return None
 
 
+    def get_raw_folder_id(self, engine_box_folder_id: str) -> str | None:
+        """Find and return the ID of the 'RAW FOLDER' inside an engine's root Box folder."""
+        if not self.client:
+            return None
+        try:
+            items = self.get_folder_items(engine_box_folder_id)
+            for folder in items.get("folders", []):
+                if folder["name"].upper() == "RAW FOLDER":
+                    return folder["id"]
+            return None
+        except Exception as e:
+            print(f"Error finding RAW FOLDER in {engine_box_folder_id}: {e}")
+            return None
+
     def delete_folder(self, folder_id):
         """Delete a folder and all its contents"""
         if not self.client:
@@ -589,47 +624,102 @@ class BoxService:
             )
             print(f"Shared Folder: {shared_folder.id} - {shared_folder.name}")
             
-            # Step 2: Copy to root folder ("GEM REC PORTAL")
-            copied_folder = self.client.folders.copy_folder(
-                folder_id=shared_folder.id,
-                parent={"id": "359797132460"}
-            )
-            print(f"Copied to box root folder: {copied_folder.id}")
-            
-            # Step 3: Wait and try to move to the desired subfolder
-            print("Initial wait: 10 minutes...")
-            time.sleep(600)
-            
-            try:
-                moved_folder = self.client.folders.update_folder_by_id(
-                    folder_id=copied_folder.id,
-                    parent={"id": dest_parent_id}
-                )
-                print(f"Moved to subfolder successfully: {moved_folder.id}")
-                return moved_folder.id
-            except Exception as e1:
-                print(f"First move attempt failed: {e1}. Retrying in 15 minutes...")
-                time.sleep(900)
-                try:
-                    moved_folder = self.client.folders.update_folder_by_id(
-                        folder_id=copied_folder.id,
-                        parent={"id": dest_parent_id}
+            # Step 2: Create root folder in destination
+            main_folder = self.get_or_create_folder(shared_folder.name, dest_parent_id)
+            if not main_folder:
+                raise Exception("Failed to create the root folder.")
+
+            files_to_download = [] # List of tuples: (file_item, destination_folder_id)
+
+            def walk_shared_folder(box_folder_id, target_parent_id):
+                offset = 0
+                limit = 100
+                while True:
+                    page = self.client.folders.get_folder_items(
+                        box_folder_id, boxapi=boxapi_header,
+                        limit=limit, offset=offset
                     )
-                    print(f"Moved to subfolder successfully on second attempt: {moved_folder.id}")
-                    return moved_folder.id
-                except Exception as e2:
-                    print(f"Second move attempt failed: {e2}. Final retry in 30 minutes...")
-                    time.sleep(1800)
+                    for item in page.entries:
+                        if item.type == "folder":
+                            new_target = self.get_or_create_folder(item.name, target_parent_id)
+                            if new_target:
+                                walk_shared_folder(item.id, new_target.id)
+                        elif item.type == "file":
+                            files_to_download.append((item, target_parent_id))
+                    
+                    if len(page.entries) < limit:
+                        break
+                    offset += limit
+            
+            print("Discovering files in the shared folder...")
+            walk_shared_folder(shared_folder.id, main_folder.id)
+            print(f"Discovered {len(files_to_download)} files to process.")
+
+            def worker(file_info):
+                file_item, target_parent_id = file_info
+                
+                # Verify if exists
+                existing_id = self.get_existing_file_id(target_parent_id, file_item.name)
+                if existing_id:
+                    print(f"File {file_item.name} already exists. Skipping.")
+                    return
+
+                print(f"Downloading {file_item.name}...")
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp_path = tmp.name
+                
+                download_success = False
+                try:
+                    file_details = self.client.files.get_file_by_id(
+                        file_item.id, boxapi=boxapi_header, fields=["download_url"]
+                    )
+                    download_url = getattr(file_details, 'download_url', None)
+
+                    if download_url:
+                        # stream to file
+                        with requests.get(download_url, stream=True) as r:
+                            r.raise_for_status()
+                            with open(tmp_path, 'wb') as f:
+                                for chunk in r.iter_content(chunk_size=1024*1024): # 1MB chunks
+                                    if chunk:
+                                        f.write(chunk)
+                        download_success = True
+                    else:
+                        byte_content = self.client.downloads.download_file(file_item.id, boxapi=boxapi_header)
+                        if byte_content is not None:
+                            with open(tmp_path, 'wb') as f:
+                                # In box-sdk-gen download_file often returns the bytes directly in typical usage 
+                                # despite ByteStream annotation because of internal implementations depending on version, 
+                                # but if it's an object with read(), we would use read(). However requests is preferred anyway.
+                                if hasattr(byte_content, 'read'):
+                                    f.write(byte_content.read())
+                                else:
+                                    f.write(byte_content)
+                            download_success = True
+                        else:
+                            print(f"Failed to get content for {file_item.name}: stream empty")
+
+                except Exception as dl_ex:
+                    print(f"Error downloading {file_item.name}: {dl_ex}")
+
+                if download_success:
+                    print(f"Processing Upload for {file_item.name}...")
                     try:
-                        moved_folder = self.client.folders.update_folder_by_id(
-                            folder_id=copied_folder.id,
-                            parent={"id": dest_parent_id}
-                        )
-                        print(f"Moved to subfolder successfully on third attempt: {moved_folder.id}")
-                        return moved_folder.id
-                    except Exception as e3:
-                        print(f"Third move attempt failed: {e3}. Giving up.")
-                        raise Exception("This folder cant be processed. Failed to move after multiple retries.")
+                        self.upload_file(target_parent_id, tmp_path, file_name=file_item.name)
+                    except Exception as ul_ex:
+                        print(f"Error uploading {file_item.name}: {ul_ex}")
+
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+            # Using max_workers=5 for concurrent download and upload. You can adjust this based on machine specs.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                list(executor.map(worker, files_to_download))
+
+            print("Shared Link Import Completed!")
+            return main_folder.id
 
         except Exception as e:
             print(f"Error importing from shared link: {e}")
@@ -642,3 +732,4 @@ class BoxService:
 
 box_service = BoxService()
 
+ 

@@ -1088,7 +1088,39 @@ export default function EngineDetails() {
         }
     };
 
-    // ── Full Engine Text Extraction trigger ───────────────────────────────
+    // ── Skip Folder Segregation trigger ──────────────────────────────────────
+    const [skipOneLevel, setSkipOneLevel] = React.useState(false);
+    const handleSkipSegregation = async () => {
+        if (segStatus === 'running') return;
+        setSegStatus('running');
+        setSegData(null);
+        try {
+            const skipParam = skipOneLevel ? '?skip_levels=1' : '?skip_levels=0';
+            await api.post(`/segregation/skip-segregation/${id}${skipParam}`);
+            // Poll the same status endpoint — backend writes to the shared _job_status dict
+            const interval = setInterval(async () => {
+                try {
+                    const statusRes = await api.get(`/segregation/status/${id}`);
+                    const s = statusRes.data.status;
+                    if (s === 'done' || s === 'error') {
+                        clearInterval(interval);
+                        setSegPollInterval(null);
+                        setSegStatus(s);
+                        if (s === 'done') {
+                            const resRes = await api.get(`/segregation/results/${id}`);
+                            setSegData(resRes.data);
+                        }
+                    }
+                } catch (_) { }
+            }, 3000);
+            setSegPollInterval(interval);
+        } catch (err) {
+            setSegStatus('error');
+            console.error(err);
+        }
+    };
+
+
     const handleFullTextExtraction = async () => {
         if (fullExtStatus === 'running') return;
         setFullExtStatus('running');
@@ -1596,9 +1628,10 @@ export default function EngineDetails() {
     };
 
     // ── Helpers: build a nested folder tree from flat file list ──────────
-    const TREE_METHODS = new Set(['Folder Match', 'Extension', 'Unclassified', 'Manual']);
+    // 'Skip Segregation' uses path-based hierarchy just like Folder Match / Extension
+    const TREE_METHODS = new Set(['Folder Match', 'Extension', 'Unclassified', 'Manual', 'Skip Segregation']);
 
-    function buildFolderTree(files) {
+    function buildFolderTree(files, categoryPrefix = '') {
         const root = { name: '', children: {}, files: [] };
         for (const file of files) {
             const pathStr = file.original_folder_path || '';
@@ -1606,8 +1639,13 @@ export default function EngineDetails() {
                 root.files.push(file);
                 continue;
             }
-            // Skip the first segment (root/engine folder) — start hierarchy from sub-folders
-            const parts = pathStr.split('/').filter(Boolean).slice(1);
+            // Strip the first segment ("RAW FOLDER" or engine root)
+            let parts = pathStr.split('/').filter(Boolean).slice(1);
+            // If categoryPrefix supplied, also strip the category-level segment
+            // so the tree starts BELOW the category folder (e.g. just "Latest" not "1. Cert.../Latest")
+            if (categoryPrefix && parts.length > 0 && parts[0] === categoryPrefix) {
+                parts = parts.slice(1);
+            }
             if (parts.length === 0) {
                 root.files.push(file);
                 continue;
@@ -1950,7 +1988,7 @@ export default function EngineDetails() {
                                     const isManualDb = f.category === 'Manual Segregation' && f.box_file_name.toLowerCase().endsWith('.db');
                                     return (!TREE_METHODS.has(f.method) || isManualDb) && !f.latest;
                                 });
-                                const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles) : null;
+                                const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles, category) : null;
 
                                 return (
                                     <div key={category}>
@@ -2372,7 +2410,7 @@ export default function EngineDetails() {
                         return (!TREE_METHODS.has(f.method) || isManualDb) && !f.latest;
                     });
                     const latestFiles = files.filter(f => f.latest);
-                    const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles) : null;
+                    const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles, category) : null;
 
                     return (
                         <div key={category}>
@@ -2910,6 +2948,58 @@ export default function EngineDetails() {
                                 : <Shuffle size={15} />}
                             {segStatus === 'running' ? 'Segregation Running...' : '🔀 Do Folder Segregation'}
                         </button>
+
+                        {/* Skip Folder Segregation button + level checkbox */}
+                        <button
+                            id="skip-folder-segregation-btn"
+                            onClick={handleSkipSegregation}
+                            disabled={segStatus === 'running'}
+                            title="Use existing folder structure as categories — no AI/OCR processing"
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '8px',
+                                padding: '8px 18px', borderRadius: '8px', border: 'none',
+                                background: segStatus === 'running'
+                                    ? '#94a3b8'
+                                    : 'linear-gradient(135deg, #d97706, #f59e0b)',
+                                color: 'white', fontWeight: 700, fontSize: '0.82rem',
+                                cursor: segStatus === 'running' ? 'not-allowed' : 'pointer',
+                                boxShadow: '0 2px 8px rgba(217,119,6,0.35)',
+                                transition: 'all 0.2s'
+                            }}
+                            onMouseEnter={(e) => { if (segStatus !== 'running') e.currentTarget.style.opacity = '0.88'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
+                        >
+                            {segStatus === 'running'
+                                ? <Loader size={15} className="spinner" />
+                                : <span style={{ fontSize: '15px' }}>⏭</span>}
+                            {segStatus === 'running' ? 'Processing...' : 'Skip Folder Segregation'}
+                        </button>
+
+                        {/* Checkbox: skip extra wrapper level */}
+                        <label
+                            title="Check this if your RAW FOLDER contains an extra wrapper folder (e.g. engine serial number) before the actual category folders"
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '6px',
+                                fontSize: '0.78rem', fontWeight: 600,
+                                color: segStatus === 'running' ? '#94a3b8' : '#92400e',
+                                cursor: segStatus === 'running' ? 'not-allowed' : 'pointer',
+                                background: skipOneLevel ? '#fef3c7' : '#fffbeb',
+                                border: `1px solid ${skipOneLevel ? '#f59e0b' : '#fde68a'}`,
+                                borderRadius: '6px', padding: '5px 10px',
+                                transition: 'all 0.2s', userSelect: 'none',
+                            }}
+                        >
+                            <input
+                                id="skip-one-level-checkbox"
+                                type="checkbox"
+                                checked={skipOneLevel}
+                                disabled={segStatus === 'running'}
+                                onChange={(e) => setSkipOneLevel(e.target.checked)}
+                                style={{ accentColor: '#d97706', width: '14px', height: '14px', cursor: 'pointer' }}
+                            />
+                            📁 Skip wrapper folder level
+                        </label>
+
                         <SegStatusBadge />
                         {segStatus === 'done' && (
                             <span
@@ -2920,6 +3010,8 @@ export default function EngineDetails() {
                             </span>
                         )}
                     </div>
+
+
 
                     {/* Main RAW FOLDER layout */}
                     <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
