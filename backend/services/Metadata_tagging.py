@@ -739,7 +739,8 @@ def perform_full_pipeline(engine_id: int, db: Session):
                             if res["did_tag"] and res["metadata_json"] is not None:
                                 row.metadata_json = res["metadata_json"]
                             if res["did_latest"]:
-                                row.latest = res["latest"]
+                                if not row.latest:
+                                    row.latest = res["latest"]
                             row.meta_data_status = res["meta_data_status"]
                             db.commit()
                     except Exception as db_err:
@@ -924,7 +925,8 @@ def perform_folder_pipeline(engine_id: int, category: str, db: Session):
                             if res["did_tag"] and res["metadata_json"] is not None:
                                 row.metadata_json = res["metadata_json"]
                             if res["did_latest"]:
-                                row.latest = res["latest"]
+                                if not row.latest:
+                                    row.latest = res["latest"]
                             row.meta_data_status = res["meta_data_status"]
                             db.commit()
                     except Exception as db_err:
