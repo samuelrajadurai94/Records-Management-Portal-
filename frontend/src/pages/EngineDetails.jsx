@@ -1452,7 +1452,7 @@ export default function EngineDetails() {
     };
 
     const FolderTreeItem = ({ item, level = 0 }) => {
-        if (item.type === 'file') return <FileTreeItem file={item} level={level} />;
+        if (item.type === 'file') return FileTreeItem({ file: item, level: level });
         const isExpanded = expandedFolders[item.id];
         return (
             <div>
@@ -1484,7 +1484,7 @@ export default function EngineDetails() {
                     )}
                 </div>
                 {isExpanded && item.children && item.children.length > 0 &&
-                    item.children.map(child => <FolderTreeItem key={child.id} item={child} level={level + 1} />)}
+                    item.children.map(child => <div key={child.id}>{FolderTreeItem({ item: child, level: level + 1 })}</div>)}
                 {isExpanded && item.isLoaded && (!item.children || item.children.length === 0) && (
                     <div style={{ paddingLeft: `${32 + level * 20}px`, fontSize: '0.8rem', color: '#999', paddingBottom: '4px' }}>
                         (Empty)
@@ -1543,7 +1543,7 @@ export default function EngineDetails() {
     };
 
     const DeliverablesFolderTreeItem = ({ item, level = 0 }) => {
-        if (item.type === 'file') return <DeliverablesFileTreeItem file={item} level={level} />;
+        if (item.type === 'file') return DeliverablesFileTreeItem({ file: item, level: level });
         const isExpanded = expandedDeliverablesFolders[item.id];
         return (
             <div>
@@ -1597,7 +1597,7 @@ export default function EngineDetails() {
                     </button>
                 </div>
                 {isExpanded && item.children && item.children.length > 0 &&
-                    item.children.map(child => <DeliverablesFolderTreeItem key={child.id} item={child} level={level + 1} />)}
+                    item.children.map(child => <div key={child.id}>{DeliverablesFolderTreeItem({ item: child, level: level + 1 })}</div>)}
                 {isExpanded && item.isLoaded && (!item.children || item.children.length === 0) && (
                     <div style={{ paddingLeft: `${32 + level * 20}px`, fontSize: '0.8rem', color: '#999', paddingBottom: '4px' }}>
                         (Empty)
@@ -1734,7 +1734,7 @@ export default function EngineDetails() {
                         {childEntries
                             .sort((a, b) => a.name.localeCompare(b.name))
                             .map(child => (
-                                <SegFolderNode key={child.name} node={child} level={level + 1} pathKey={nodeKey} />
+                                <div key={child.name}>{SegFolderNode({ node: child, level: level + 1, pathKey: nodeKey })}</div>
                             ))
                         }
                         {/* Files at this level */}
@@ -2119,20 +2119,20 @@ export default function EngineDetails() {
                                                         <>
                                                             {/* Files at root level (no folder path) */}
                                                             {folderTree.files.map(file => (
-                                                                <SegFlatFileItem key={file.box_file_id} file={file} />
+                                                                <div key={file.box_file_id}>{SegFlatFileItem({ file: file })}</div>
                                                             ))}
                                                             {/* Nested folder nodes */}
                                                             {Object.values(folderTree.children)
                                                                 .sort((a, b) => a.name.localeCompare(b.name))
                                                                 .map(child => (
-                                                                    <SegFolderNode key={child.name} node={child} level={1} pathKey={category} />
+                                                                    <div key={child.name}>{SegFolderNode({ node: child, level: 1, pathKey: category })}</div>
                                                                 ))
                                                             }
                                                         </>
                                                     )}
                                                     {/* Flat-rendered files (Direct Keyword / AI MODEL) */}
                                                     {flatFiles.map(file => (
-                                                        <SegFlatFileItem key={file.box_file_id} file={file} />
+                                                        <div key={file.box_file_id}>{SegFlatFileItem({ file: file })}</div>
                                                     ))}
                                                 </>
                                             );
@@ -2358,7 +2358,7 @@ export default function EngineDetails() {
                     {isOpen && (
                         <>
                             {childEntries.sort((a, b) => a.name.localeCompare(b.name)).map(child => (
-                                <MetaFolderNode key={child.name} node={child} level={level + 1} pathKey={nodeKey} />
+                                <div key={child.name}>{MetaFolderNode({ node: child, level: level + 1, pathKey: nodeKey })}</div>
                             ))}
                             {node.files.map(file => {
                                 const mStyle = METHOD_COLORS[file.method] || METHOD_COLORS['Unclassified'];
@@ -2528,19 +2528,19 @@ export default function EngineDetails() {
                                         {folderTree && (
                                             <>
                                                 {folderTree.files.map(file => (
-                                                    <MetaFlatFileItem key={file.id} file={file} />
+                                                    <div key={file.id}>{MetaFlatFileItem({ file: file })}</div>
                                                 ))}
                                                 {Object.values(folderTree.children)
                                                     .sort((a, b) => a.name.localeCompare(b.name))
                                                     .map(child => (
-                                                        <MetaFolderNode key={child.name} node={child} level={1} pathKey={category} />
+                                                        <div key={child.name}>{MetaFolderNode({ node: child, level: 1, pathKey: category })}</div>
                                                     ))
                                                 }
                                             </>
                                         )}
                                         {/* Flat-rendered files (Direct Keyword / AI MODEL) */}
                                         {flatFiles.map(file => (
-                                            <MetaFlatFileItem key={file.id} file={file} />
+                                            <div key={file.id}>{MetaFlatFileItem({ file: file })}</div>
                                         ))}
                                     </>
                                 );
@@ -3035,7 +3035,7 @@ export default function EngineDetails() {
                             borderRight: '1px solid #e0e0e0', overflowY: 'auto',
                             padding: '1rem 0.5rem', position: 'relative'
                         }}>
-                            {folderStructure && <FolderTreeItem item={folderStructure} />}
+                            {folderStructure && FolderTreeItem({ item: folderStructure })}
                             {/* Resize handle */}
                             <div
                                 onMouseDown={handleMouseDown}
@@ -3452,9 +3452,7 @@ export default function EngineDetails() {
                                         borderRight: '1px solid #e0e0e0', overflowY: 'auto',
                                         padding: '1rem 0.5rem', position: 'relative'
                                     }}>
-                                        {deliverablesFolderStructure ? (
-                                            <DeliverablesFolderTreeItem item={deliverablesFolderStructure} />
-                                        ) : (
+                                        {deliverablesFolderStructure ? ( DeliverablesFolderTreeItem({ item: deliverablesFolderStructure }) ) : (
                                             <div style={{ padding: '2rem', textAlign: 'center', color: '#666' }}>
                                                 <Loader size={20} className="spinner" style={{ marginBottom: '10px' }} />
                                                 <div>Loading folder tree...</div>

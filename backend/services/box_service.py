@@ -624,11 +624,9 @@ class BoxService:
             )
             print(f"Shared Folder: {shared_folder.id} - {shared_folder.name}")
             
-            # Step 2: Create root folder in destination
-            main_folder = self.get_or_create_folder(shared_folder.name, dest_parent_id)
-            if not main_folder:
-                raise Exception("Failed to create the root folder.")
-
+            # Step 2: Skip creating the root folder of the shared link
+            # We want the contents of the shared link to go directly into dest_parent_id (RAW FOLDER)
+            
             files_to_download = [] # List of tuples: (file_item, destination_folder_id)
 
             def walk_shared_folder(box_folder_id, target_parent_id):
@@ -652,7 +650,8 @@ class BoxService:
                     offset += limit
             
             print("Discovering files in the shared folder...")
-            walk_shared_folder(shared_folder.id, main_folder.id)
+            # Initiate walk directly into the destination parent (RAW FOLDER)
+            walk_shared_folder(shared_folder.id, dest_parent_id)
             print(f"Discovered {len(files_to_download)} files to process.")
 
             def worker(file_info):
@@ -719,7 +718,7 @@ class BoxService:
                 list(executor.map(worker, files_to_download))
 
             print("Shared Link Import Completed!")
-            return main_folder.id
+            return dest_parent_id
 
         except Exception as e:
             print(f"Error importing from shared link: {e}")
