@@ -1640,12 +1640,26 @@ export default function EngineDetails() {
                 continue;
             }
             // Strip the first segment ("RAW FOLDER" or engine root)
-            let parts = pathStr.split('/').filter(Boolean).slice(1);
-            // If categoryPrefix supplied, also strip the category-level segment
-            // so the tree starts BELOW the category folder (e.g. just "Latest" not "1. Cert.../Latest")
-            if (categoryPrefix && parts.length > 0 && parts[0] === categoryPrefix) {
+            let parts = pathStr.split('/').filter(Boolean);
+            
+            // If categoryPrefix supplied, find it explicitly in the parts list
+            // and strip everything up to and including it. This ensures we don't
+            // accidentally display wrapper folders (like engine serial).
+            if (categoryPrefix) {
+                const catIndex = parts.indexOf(categoryPrefix);
+                if (catIndex !== -1) {
+                    parts = parts.slice(catIndex + 1);
+                } else {
+                    // Fallback to old simple stripping
+                    parts = parts.slice(1);
+                    if (parts.length > 0 && parts[0] === categoryPrefix) {
+                        parts = parts.slice(1);
+                    }
+                }
+            } else {
                 parts = parts.slice(1);
             }
+            
             if (parts.length === 0) {
                 root.files.push(file);
                 continue;

@@ -454,16 +454,19 @@ def _build_segregation_zip(engine_id: int, category: str = None):
             base_path = os.path.join(temp_dir, safe_category)
 
             if row.method == "Skip Segregation":
-                # Maintain the EXACT same hierarchy logic used in the frontend UI viewer:
-                # 1. Strip the root segment ("RAW FOLDER") 
-                # 2. If the next segment is exactly the category name, strip it too.
-                # Do not strip wrapper folders unexpectedly.
+                # Smart stripping: Find the category in the original path and strip everything up to it.
+                # This ensures we don't duplicate wrapper folders like "Engine Serial/" in the hierarchy.
                 path_str = row.original_folder_path or ""
                 all_parts = [p.strip() for p in path_str.split("/") if p.strip()]
                 
-                sub_parts = all_parts[1:] if len(all_parts) > 0 else []
-                if sub_parts and sub_parts[0] == row.category:
-                    sub_parts = sub_parts[1:]
+                cat_index = next((idx for idx, seg in enumerate(all_parts) if seg == row.category), None)
+                if cat_index is not None:
+                    sub_parts = all_parts[cat_index + 1:]
+                else:
+                    # Fallback
+                    sub_parts = all_parts[1:] if len(all_parts) > 0 else []
+                    if sub_parts and sub_parts[0] == row.category:
+                        sub_parts = sub_parts[1:]
                 
                 sub_parts = ["".join(c for c in p if c not in r'<>:"/\|?*') for p in sub_parts]
                 target_dir = os.path.join(base_path, *sub_parts) if sub_parts else base_path
@@ -640,16 +643,19 @@ def _export_segregation_to_box(engine_id: int):
             safe_category = "".join(c for c in row.category if c not in r'<>:"/\|?*').strip()
 
             if row.method == "Skip Segregation":
-                # Maintain the EXACT same hierarchy logic used in the frontend UI viewer:
-                # 1. Strip the root segment ("RAW FOLDER") 
-                # 2. If the next segment is exactly the category name, strip it too.
-                # Do not strip wrapper folders unexpectedly.
+                # Smart stripping: Find the category in the original path and strip everything up to it.
+                # This ensures we don't duplicate wrapper folders like "Engine Serial/" in the hierarchy.
                 path_str = row.original_folder_path or ""
                 all_parts = [p.strip() for p in path_str.split("/") if p.strip()]
                 
-                sub_parts = all_parts[1:] if len(all_parts) > 0 else []
-                if sub_parts and sub_parts[0] == row.category:
-                    sub_parts = sub_parts[1:]
+                cat_index = next((idx for idx, seg in enumerate(all_parts) if seg == row.category), None)
+                if cat_index is not None:
+                    sub_parts = all_parts[cat_index + 1:]
+                else:
+                    # Fallback
+                    sub_parts = all_parts[1:] if len(all_parts) > 0 else []
+                    if sub_parts and sub_parts[0] == row.category:
+                        sub_parts = sub_parts[1:]
 
                 # Sanitise each segment
                 sub_parts = ["".join(c for c in p if c not in r'<>:"/\|?*').strip() for p in sub_parts]
