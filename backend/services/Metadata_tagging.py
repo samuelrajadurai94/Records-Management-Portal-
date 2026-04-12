@@ -494,7 +494,7 @@ def perform_metadata_tagging(engine_id: int, db: Session):
                         if row:
                             row.metadata_json = result["metadata_json"]
                             # Also check for latest
-                            if row.raw_text:
+                            if row.raw_text and not row.latest:
                                 is_latest = check_latest([row.raw_text], engine_csn)
                                 row.latest = is_latest
                             db.commit()
@@ -572,7 +572,7 @@ def process_single_file(result_id: int, db: Session) -> dict:
         try:
             row.metadata_json = tag_result["metadata_json"]
             # Also update latest column
-            if row.raw_text:
+            if row.raw_text and not row.latest:
                 row.latest = check_latest([row.raw_text], engine_csn)
             db.commit()
             print(f"[SingleFile] Row {result_id}: tagging and latest check done.")

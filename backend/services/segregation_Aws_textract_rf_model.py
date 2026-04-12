@@ -585,7 +585,11 @@ def perform_full_engine_text_extraction(engine_id: int, db: Session):
                         try:
                             row = db.query(models.SegregationResult).filter(models.SegregationResult.id == result["row_id"]).first()
                             if row:
-                                row.latest = result.get("latest", False)
+                                # If the file's latest column is already True, keep it True.
+                                # Do not update it to False during Full Engine Extraction.
+                                if not row.latest:
+                                    row.latest = result.get("latest", False)
+                                
                                 if result.get("extracted_new"):
                                     row.raw_text = result["raw_text"]
                                     row.cleaned_text = result["cleaned_text"]
