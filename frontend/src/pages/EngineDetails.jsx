@@ -1631,7 +1631,7 @@ export default function EngineDetails() {
     // 'Skip Segregation' uses path-based hierarchy just like Folder Match / Extension
     const TREE_METHODS = new Set(['Folder Match', 'Extension', 'Unclassified', 'Manual', 'Skip Segregation']);
 
-    function buildFolderTree(files, categoryPrefix = '') {
+    function buildFolderTree(files, categoryPrefix = '', isNormalView = false) {
         const root = { name: '', children: {}, files: [] };
         for (const file of files) {
             const pathStr = file.original_folder_path || '';
@@ -1654,10 +1654,15 @@ export default function EngineDetails() {
                     parts = parts.slice(1);
                     if (parts.length > 0 && parts[0] === categoryPrefix) {
                         parts = parts.slice(1);
+                    } else if (isNormalView && file.method === 'Folder Match') {
+                        if (parts.length > 0) parts = parts.slice(1);
                     }
                 }
             } else {
                 parts = parts.slice(1);
+                if (isNormalView && file.method === 'Folder Match') {
+                    if (parts.length > 0) parts = parts.slice(1);
+                }
             }
             
             if (parts.length === 0) {
@@ -2002,7 +2007,7 @@ export default function EngineDetails() {
                                     const isManualDb = f.category === 'Manual Segregation' && f.box_file_name.toLowerCase().endsWith('.db');
                                     return (!TREE_METHODS.has(f.method) || isManualDb) && !f.latest;
                                 });
-                                const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles, category) : null;
+                                const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles, category, true) : null;
 
                                 return (
                                     <div key={category}>

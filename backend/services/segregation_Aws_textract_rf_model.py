@@ -281,8 +281,8 @@ def _folder_keyword_match(folder_path: str, file_ext: str) -> str | None:
     Returns category string or None.
     """
     # Media files → Borescope
-    if file_ext.lower() in MEDIA_EXTENSIONS:
-        return "16. Last Borescope Inspection"
+    # if file_ext.lower() in MEDIA_EXTENSIONS:
+    #     return "16. Last Borescope Inspection"
 
     path_clean = _remove_symbols(folder_path)
     path_lower = path_clean.lower()
