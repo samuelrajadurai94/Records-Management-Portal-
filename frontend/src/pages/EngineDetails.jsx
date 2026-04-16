@@ -1654,13 +1654,13 @@ export default function EngineDetails() {
                     parts = parts.slice(1);
                     if (parts.length > 0 && parts[0] === categoryPrefix) {
                         parts = parts.slice(1);
-                    } else if (isNormalView && file.method === 'Folder Match') {
+                    } else if (isNormalView && file.method === 'Folder Match' && categoryPrefix !== 'Manual Segregation') {
                         if (parts.length > 0) parts = parts.slice(1);
                     }
                 }
             } else {
                 parts = parts.slice(1);
-                if (isNormalView && file.method === 'Folder Match') {
+                if (isNormalView && file.method === 'Folder Match' && categoryPrefix !== 'Manual Segregation') {
                     if (parts.length > 0) parts = parts.slice(1);
                 }
             }
@@ -2429,7 +2429,7 @@ export default function EngineDetails() {
                         return (!TREE_METHODS.has(f.method) || isManualDb) && !f.latest;
                     });
                     const latestFiles = files.filter(f => f.latest);
-                    const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles, category) : null;
+                    const folderTree = treeFiles.length > 0 ? buildFolderTree(treeFiles, category, true) : null;
 
                     return (
                         <div key={category}>

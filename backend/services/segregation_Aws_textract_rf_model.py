@@ -225,15 +225,34 @@ MEDIA_EXTENSIONS = {".mp4", ".png", ".jpeg", ".jpg", ".tif", ".heic", ".bmp"}
 FOLDER_RULES = [
     # (category_name, keywords, is_regex_AD_SB)
     ("33. Engine Data Plate",          ["data plate"],                                          False),
-    ("14. Shop Visit Records",     ["sv", "shop", "visit"],                                 False),
+    ("14. Shop visit records",     ["sv", "shop", "visit"],                                 False),
     ("20. LLP BTB Trace",          ["btb", "back to birth", "llp btb", "llp traces"],       False),
     ("12. Manufacturer delivery docs", ["manufacture", "export certificate", "export cofa"], False),
     ("17. Commercial",             ["commercial"],                                           False),
-    ("32. Historical Misc",            ["historical miscellaneous", "misc", "miscellaneous", "historical misc"], False),
+    ("32. Historical-Misc",            ["historical miscellaneous", "misc", "miscellaneous", "historical misc"], False),
     ("21. AD",                     ["AD"],                                                   "AD"),
     ("22. SB",                     ["SB"],                                                   "SB"),
     ("26. QEC-LRU Inventory",      ["QEC", "LRU", "Accessory", "accessory"],                False),
-    ("Archive",                    ["archive"],                                              False),
+    ("1. Certified statement of total time in service (Hrs & Cycles)", ["engine status", "time", "cycle"], False),
+    ("2. Non-Incident-Accident Statement", ["incident", "accident"], False),
+    ("3. Non-exceedance Statement", ["exceed", "exceedance"], False),
+    ("4. Power-Thrust rating Statement", ["thrust", "thrust setting"], False),
+    ("6. Oil-Fluid used Statement", ["fluid", "oil fluid"], False),
+    ("7. Field repairs Statement", ["field repair"], False),
+    ("8. Engine Condition-Trend Monitoring Report", ["condition", "trend", "condition monitoring"], False),
+    ("9. Oil Consumption Reports", ["oil consumption"], False),
+    ("10. Last Test Cell-MPA Report", ["last test cell", "testcell"], False),
+    ("11. ETOPs compliance report", ["etop"], False),
+    ("13. Logbook & Install-Removal History", ["logbook", "install removal history", "removal"], False),
+    ("15. Engine Last Release Certificate", ["release", "last release"], False),
+    ("16. Last Borescope Inspection", ["borescope"], False),
+    ("18. Preservation", ["preservation"], False),
+    ("19. LLP Summary", ["llp"], False),
+    ("23. In-House Modifications (If applicable)", ["modification"], False),
+    ("27. LDND-MPD", ["ldnd"], False),
+    ("29. Ferry flight(If applicable)", ["ferry", "ferry flight"], False),
+    ("30. Thrust Change(s)", ["thrust change", "thrust history"], False),
+    ("5. PMA-DER Statement", ["PMA", "DER"], "EXACT_WORD"),
 ]
 
 # check_Matching_folder_name from desktop app (for archive subfolders)
@@ -241,7 +260,7 @@ def _category_from_text(text: str) -> str | None:
     t = _remove_symbols(text).lower()
     tr = _remove_symbols(text)   # preserve case for AD/SB checks
     checks = [
-        (["engine status", "time", "cycle"],             "1. Certified statement of total time in service"),
+        (["engine status", "time", "cycle"],             "1. Certified statement of total time in service (Hrs & Cycles)"),
         (["incident", "accident"],                        "2. Non-Incident-Accident Statement"),
         (["exceed", "exceedance"],                        "3. Non-exceedance Statement"),
         (["thrust", "thrust setting"],                    "4. Power-Thrust rating Statement"),
@@ -258,10 +277,10 @@ def _category_from_text(text: str) -> str | None:
         (["commercial"],                                  "17. Commercial"),
         (["preservation"],                                "18. Preservation"),
         (["llp"],                                         "19. LLP Summary"),
-        (["modification"],                                "23. In-House Modifications(If applicable)"),
+        (["modification"],                                "23. In-House Modifications (If applicable)"),
         (["qec", "lru", "accessory"],                     "26. QEC-LRU Inventory"),
         (["ldnd"],                                        "27. LDND-MPD"),
-        (["ferry", "ferry flight"],                       "29. Ferry flight"),
+        (["ferry", "ferry flight"],                       "29. Ferry flight(If applicable)"),
         (["thrust change", "thrust history"],             "30. Thrust Change(s)"),
     ]
     for kws, label in checks:
@@ -294,6 +313,10 @@ def _folder_keyword_match(folder_path: str, file_ext: str) -> str | None:
         elif rule_type == "SB":
             if re.search(r'(?<!\w)[^\w]*SB[^\w]*(?!\w)', path_clean):
                 return category
+        elif rule_type == "EXACT_WORD":
+            for kw in keywords:
+                if re.search(rf'(?<!\w)[^\w]*{kw}[^\w]*(?!\w)', path_clean):
+                    return category
         elif rule_type is False:
             # Special: manufacturer docs — exclude 'non'
             if category == "12. Manufacturer delivery docs":
@@ -301,12 +324,6 @@ def _folder_keyword_match(folder_path: str, file_ext: str) -> str | None:
                     return category
             else:
                 if any(kw.lower() in path_lower for kw in keywords):
-                    # Archive rule: check parent for a matching label
-                    if category == "Archive":
-                        parts = folder_path.split("/")
-                        parent_name = parts[-2] if len(parts) >= 2 else ""
-                        label = _category_from_text(parent_name) 
-                        return label if label else "Manual Segregation"
                     return category
     return None
 
